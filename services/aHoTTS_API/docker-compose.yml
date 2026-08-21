@@ -1,0 +1,34 @@
+# =============================================================================
+# aHoTTS API - Docker Compose
+# =============================================================================
+
+services:
+  ahotts-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ahotts-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist downloaded voice models between container restarts
+      - ahotts-voices:/app/aHoTTS/ahotts/voices
+      # Persist HuggingFace cache
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MAX_TEXT_LENGTH=5000
+    restart: unless-stopped
+    # Resource limits (adjust as needed)
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 512M
+
+volumes:
+  ahotts-voices:
+    name: ahotts-voices
+  hf-cache:
+    name: ahotts-hf-cache

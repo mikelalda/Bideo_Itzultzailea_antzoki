@@ -1,0 +1,14 @@
+# Core
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+python-multipart==0.0.*
+
+# ML / Audio
+torch>=2.1.0
+transformers>=4.40.0
+accelerate>=0.27.0
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Utilities
+numpy>=1.24.0

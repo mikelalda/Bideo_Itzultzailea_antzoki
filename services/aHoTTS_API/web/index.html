@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>aHoTTS – Text-to-Speech en el navegador</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<div class="container">
+
+  <!-- ── Header ────────────────────────────────────────────────────────── -->
+  <header>
+    <h1>🗣️ aHoTTS Browser</h1>
+    <p>
+      Síntesis de voz multilingüe con tres motores en paralelo:
+      <span class="badge badge-api">API</span>
+      <span class="badge badge-transformers">Transformers.js</span>
+      <span class="badge badge-webspeech">Web Speech</span>
+    </p>
+  </header>
+
+  <!-- ── Synthesis card ────────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>✏️ Sintetizar texto</h2>
+
+    <div class="form-group">
+      <label for="text-input">Texto</label>
+      <textarea id="text-input" placeholder="Escribe aquí el texto a sintetizar…">Kaixo, zer moduz zaude?</textarea>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label for="engine-select">Motor</label>
+        <select id="engine-select">
+          <option value="api">🖥️ aHoTTS API (servidor)</option>
+          <option value="transformers">🤗 Transformers.js (navegador)</option>
+          <option value="webspeech">🌐 Web Speech API (nativo)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="voice-select">Voz</label>
+        <select id="voice-select">
+          <option value="">— cargando voces —</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- API-specific URL -->
+    <div class="form-group" id="api-url-group">
+      <label for="api-url">URL de la API</label>
+      <input type="url" id="api-url" placeholder="http://localhost:8000" />
+    </div>
+
+    <div class="btn-group">
+      <button class="btn btn-primary" id="btn-speak">▶ Sintetizar</button>
+      <button class="btn btn-danger"  id="btn-stop" disabled>■ Detener</button>
+    </div>
+
+    <!-- Status -->
+    <div id="status"></div>
+
+    <!-- Progress bar (transformers.js model download) -->
+    <div id="progress-bar-wrapper">
+      <div class="progress-track">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+    </div>
+
+    <!-- Audio output -->
+    <audio id="audio-output" controls></audio>
+  </div>
+
+  <!-- ── Available voices card ─────────────────────────────────────────── -->
+  <div class="card">
+    <h2>📋 Voces disponibles</h2>
+    <p style="color:var(--muted);font-size:.88rem;">
+      Las voces se cargan de los tres motores. Haz clic en «Recargar» si faltan voces nativas.
+    </p>
+    <button class="btn btn-primary" id="btn-reload-voices" style="margin-bottom:1rem;">🔄 Recargar voces</button>
+    <div class="voice-list" id="voice-list">
+      <em>Cargando…</em>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Scripts ──────────────────────────────────────────────────────────── -->
+<script type="module">
+import { AhoTTSManager } from "./js/ahotts-browser.js";
+
+// ── DOM refs ──────────────────────────────────────────────────────────────
+const $text        = document.getElementById("text-input");
+const $engine      = document.getElementById("engine-select");
+const $voice       = document.getElementById("voice-select");
+const $apiUrl      = document.getElementById("api-url");
+const $apiUrlGroup = document.getElementById("api-url-group");
+const $btnSpeak    = document.getElementById("btn-speak");
+const $btnStop     = document.getElementById("btn-stop");
+const $status      = document.getElementById("status");
+const $progress    = document.getElementById("progress-bar-wrapper");
+const $progressBar = document.getElementById("progress-fill");
+const $audio       = document.getElementById("audio-output");
+const $voiceList   = document.getElementById("voice-list");
+const $btnReload   = document.getElementById("btn-reload-voices");
+
+// ── Manager instance ─────────────────────────────────────────────────────
+const apiUrl = window.location.origin;
+$apiUrl.value = apiUrl;
+
+const manager = new AhoTTSManager({ apiUrl });
+
+// ── State ────────────────────────────────────────────────────────────────
+let allVoices = { api: [], transformers: [], webspeech: [] };
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+function setStatus(msg, type = "info") {
+  $status.textContent = msg;
+  $status.className = type;
+}
+function clearStatus() {
+  $status.className = "";
+  $status.textContent = "";
+}
+
+function badgeFor(engine) {
+  const cls = { api: "badge-api", transformers: "badge-transformers", webspeech: "badge-webspeech" };
+  const txt = { api: "API", transformers: "Transformers.js", webspeech: "Web Speech" };
+  return `<span class="badge ${cls[engine] || ""}">${txt[engine] || engine}</span>`;
+}
+
+// ── Load voices ──────────────────────────────────────────────────────────
+async function loadVoices() {
+  setStatus("Cargando voces disponibles…", "info");
+
+  allVoices = await manager.getAllVoices();
+
+  // Render voice list panel
+  const items = [
+    ...allVoices.api.map(v => ({ ...v, _engine: "api" })),
+    ...allVoices.transformers.map(v => ({ ...v, _engine: "transformers" })),
+    ...allVoices.webspeech.map(v => ({ ...v, _engine: "webspeech" })),
+  ];
+
+  if (items.length === 0) {
+    $voiceList.innerHTML = "<em>No se encontraron voces.</em>";
+  } else {
+    $voiceList.innerHTML = items.map(v =>
+      `<div class="voice-item">${badgeFor(v._engine)} ${v.label}</div>`
+    ).join("");
+  }
+
+  // Populate voice <select> for current engine
+  updateVoiceSelect();
+  clearStatus();
+}
+
+function updateVoiceSelect() {
+  const engine = $engine.value;
+  const voices = allVoices[engine] || [];
+
+  // Show/hide API URL field
+  $apiUrlGroup.style.display = engine === "api" ? "block" : "none";
+
+  $voice.innerHTML = "";
+  if (voices.length === 0) {
+    $voice.innerHTML = `<option value="">— sin voces disponibles —</option>`;
+    return;
+  }
+
+  voices.forEach(v => {
+    const opt = document.createElement("option");
+    opt.value = JSON.stringify(v);
+    opt.textContent = v.label;
+    $voice.appendChild(opt);
+  });
+}
+
+// ── Synthesize ───────────────────────────────────────────────────────────
+async function handleSpeak() {
+  const text = $text.value.trim();
+  if (!text) { setStatus("Escribe un texto primero.", "error"); return; }
+
+  const engine = $engine.value;
+  let voiceData;
+  try { voiceData = JSON.parse($voice.value); }
+  catch { voiceData = {}; }
+
+  $btnSpeak.disabled = true;
+  $btnStop.disabled = false;
+  $audio.classList.remove("visible");
+
+  // Progress for transformers downloads
+  $progress.classList.remove("visible");
+  $progressBar.style.width = "0%";
+
+  const onProgress = (p) => {
+    if (p.status === "progress" && p.total) {
+      $progress.classList.add("visible");
+      const pct = Math.round((p.loaded / p.total) * 100);
+      $progressBar.style.width = pct + "%";
+      setStatus(`Descargando modelo… ${pct}%`, "info");
+    }
+    if (p.status === "done") {
+      $progress.classList.remove("visible");
+    }
+  };
+
+  try {
+    setStatus("Sintetizando…", "info");
+
+    // Update API base URL if changed
+    if (engine === "api") {
+      manager.api.setBaseUrl($apiUrl.value);
+    }
+
+    const blob = await manager.synthesize(text, {
+      engine,
+      language: voiceData.language,
+      voice: voiceData.voiceId,
+      onProgress,
+    });
+
+    if (blob) {
+      // Audio blob returned → play via <audio>
+      const url = URL.createObjectURL(blob);
+      $audio.src = url;
+      $audio.classList.add("visible");
+      $audio.play();
+      setStatus("✅ Síntesis completada.", "success");
+    } else {
+      // Web Speech plays inline – no blob
+      setStatus("✅ Reproduciendo con Web Speech API.", "success");
+    }
+  } catch (err) {
+    setStatus(`❌ Error: ${err.message}`, "error");
+    console.error(err);
+  } finally {
+    $btnSpeak.disabled = false;
+    $btnStop.disabled = true;
+    $progress.classList.remove("visible");
+  }
+}
+
+function handleStop() {
+  manager.webSpeech.stop();
+  $audio.pause();
+  $audio.currentTime = 0;
+  $btnStop.disabled = true;
+  clearStatus();
+}
+
+// ── Events ───────────────────────────────────────────────────────────────
+$engine.addEventListener("change", updateVoiceSelect);
+$btnSpeak.addEventListener("click", handleSpeak);
+$btnStop.addEventListener("click", handleStop);
+$btnReload.addEventListener("click", loadVoices);
+
+// Web Speech API may load voices asynchronously
+if (window.speechSynthesis) {
+  window.speechSynthesis.onvoiceschanged = () => loadVoices();
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────
+loadVoices();
+</script>
+</body>
+</html>

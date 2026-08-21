@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="eu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bideo Itzultzailea - Video Translator</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🎬 Bideo Itzultzailea</h1>
+            <p class="subtitle">Bideoen itzulpen sistema — Castellano ↔ Euskera</p>
+        </header>
+
+        <!-- Service Status -->
+        <div class="status-bar" id="statusBar">
+            <div class="status-item">
+                <span class="status-dot" id="statusOrchestrator"></span>
+                <span>Orchestrator</span>
+            </div>
+            <div class="status-item">
+                <span class="status-dot" id="statusWhisper"></span>
+                <span>Whisper (STT)</span>
+            </div>
+            <div class="status-item">
+                <span class="status-dot" id="statusAhotts"></span>
+                <span>aHoTTS (TTS)</span>
+            </div>
+        </div>
+
+        <!-- Main Form -->
+        <div class="card">
+            <form id="translateForm">
+                <!-- File Upload -->
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-icon">📁</div>
+                    <p class="upload-text">Arrastatu bideo bat hona edo klik egin</p>
+                    <p class="upload-hint">Formatu onartuak: MP4, AVI, MKV, MOV, WEBM</p>
+                    <input type="file" id="videoFile" accept="video/*" hidden>
+                </div>
+
+                <div class="file-info" id="fileInfo" style="display: none;">
+                    <span class="file-name" id="fileName"></span>
+                    <button type="button" class="btn-remove" id="removeFile">✕</button>
+                </div>
+
+                <!-- Video Preview -->
+                <div class="preview-container" id="previewContainer" style="display: none;">
+                    <video id="videoPreview" controls></video>
+                </div>
+
+                <!-- Language Selection -->
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="sourceLang">Jatorrizko hizkuntza</label>
+                        <select id="sourceLang" required>
+                            <option value="es">🇪🇸 Castellano</option>
+                            <option value="eu">🇺🇾 Euskera</option>
+                        </select>
+                    </div>
+
+                    <div class="swap-btn" id="swapLangs" title="Hizkuntzak trukatu">
+                        ⇄
+                    </div>
+
+                    <div class="form-group">
+                        <label for="targetLang">Helburu hizkuntza</label>
+                        <select id="targetLang" required>
+                            <option value="eu">🇺🇾 Euskera</option>
+                            <option value="es">🇪🇸 Castellano</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Voice Selection -->
+                <div class="form-group">
+                    <label for="voice">Ahots sintetikoa</label>
+                    <select id="voice" required>
+                        <option value="" disabled>Ahotsak kargatzen...</option>
+                    </select>
+                </div>
+
+                <!-- Submit -->
+                <button type="submit" class="btn-primary" id="submitBtn">
+                    🎬 Bideoa itzuli
+                </button>
+            </form>
+        </div>
+
+        <!-- Progress -->
+        <div class="card progress-card" id="progressCard" style="display: none;">
+            <h3>Itzulpen prozesua</h3>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <p class="progress-text" id="progressText">Hasieratzen...</p>
+            <div class="progress-steps">
+                <div class="step" id="step-upload" data-step="uploading">
+                    <div class="step-icon">📤</div>
+                    <span>Igoera</span>
+                </div>
+                <div class="step" id="step-extract" data-step="extracting_audio">
+                    <div class="step-icon">🎵</div>
+                    <span>Audioa</span>
+                </div>
+                <div class="step" id="step-transcribe" data-step="transcribing">
+                    <div class="step-icon">📝</div>
+                    <span>Transkripzioa</span>
+                </div>
+                <div class="step" id="step-translate" data-step="translating">
+                    <div class="step-icon">🔄</div>
+                    <span>Itzulpena</span>
+                </div>
+                <div class="step" id="step-synthesize" data-step="synthesizing">
+                    <div class="step-icon">🗣️</div>
+                    <span>Sintesia</span>
+                </div>
+                <div class="step" id="step-combine" data-step="combining">
+                    <div class="step-icon">🔗</div>
+                    <span>Konbinazioa</span>
+                </div>
+                <div class="step" id="step-finalize" data-step="finalizing">
+                    <div class="step-icon">✅</div>
+                    <span>Amaiera</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div class="card results-card" id="resultsCard" style="display: none;">
+            <h3>Emaitza</h3>
+            <div class="result-section">
+                <h4>Jatorrizko testua (transkripzioa):</h4>
+                <div class="text-box" id="originalText"></div>
+            </div>
+            <div class="result-section">
+                <h4>Itzulitako testua:</h4>
+                <div class="text-box" id="translatedText"></div>
+            </div>
+            <div class="result-actions">
+                <a class="btn-primary btn-download" id="downloadBtn" href="#" download>
+                    ⬇️ Itzulitako bideoa deskargatu
+                </a>
+                <button class="btn-secondary" id="newTranslation">
+                    🔄 Itzulpen berria
+                </button>
+            </div>
+        </div>
+
+        <!-- Error -->
+        <div class="card error-card" id="errorCard" style="display: none;">
+            <h3>⚠️ Errorea</h3>
+            <p id="errorText"></p>
+            <button class="btn-secondary" id="retryBtn">Berriz saiatu</button>
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Whisper API (STT) + MarianMT (Itzulpena) + aHoTTS (TTS)</p>
+            <p>Castellano ↔ Euskera bideo itzulpen sistema</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
