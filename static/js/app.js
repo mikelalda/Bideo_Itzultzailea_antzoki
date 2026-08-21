@@ -34,6 +34,18 @@ const errorCard = document.getElementById('errorCard');
 const errorText = document.getElementById('errorText');
 const retryBtn = document.getElementById('retryBtn');
 
+// Step-by-step review cards
+const transcriptReviewCard = document.getElementById('transcriptReviewCard');
+const transcriptSrtEditor = document.getElementById('transcriptSrtEditor');
+const approveTranscriptBtn = document.getElementById('approveTranscriptBtn');
+const translationReviewCard = document.getElementById('translationReviewCard');
+const translationSrtViewer = document.getElementById('translationSrtViewer');
+const approveTranslationBtn = document.getElementById('approveTranslationBtn');
+const synthesisReviewCard = document.getElementById('synthesisReviewCard');
+const approveSynthesisBtn = document.getElementById('approveSynthesisBtn');
+
+let currentJobId = null;
+
 // Voice options per target language
 const VOICES = {
     eu: [
@@ -195,7 +207,7 @@ function updateVoiceOptions() {
 }
 
 // ---------------------------------------------------------------------------
-// Form Submission
+// Form Submission (urrats-1: bideoa igo + transkribatu)
 // ---------------------------------------------------------------------------
 translateForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -210,25 +222,24 @@ translateForm.addEventListener('submit', async (e) => {
         return;
     }
 
-    // Prepare form data
     const formData = new FormData();
     formData.append('file', selectedFile);
     formData.append('source_lang', sourceLang.value);
     formData.append('target_lang', targetLang.value);
     formData.append('voice', voiceSelect.value);
 
-    // Show progress
     hideError();
     resultsCard.style.display = 'none';
+    transcriptReviewCard.style.display = 'none';
+    translationReviewCard.style.display = 'none';
+    synthesisReviewCard.style.display = 'none';
     progressCard.style.display = 'block';
     submitBtn.disabled = true;
     resetProgress();
 
     try {
-        // 1) Kick off the job. This returns almost instantly (the actual
-        //    pipeline runs in the background on the server) -- it does NOT
-        //    wait for the translation to finish, so it never hits the HF
-        //    Spaces proxy's ~60s timeout on long HTTP requests.
+        // Berehala itzultzen du job_id bat -- pipeline osoa ez du itxaron
+        // behar (HF Spaces-en proxy-ak eskaera luzeak mozten ditu ~60s-tara).
         const res = await fetch(`${API_BASE}/api/translate`, {
             method: 'POST',
             body: formData,
@@ -240,10 +251,8 @@ translateForm.addEventListener('submit', async (e) => {
         }
 
         const { job_id } = await res.json();
-
-        // 2) Poll the job status until it's done or fails. Each poll is a
-        //    tiny, fast request, so it's immune to the long-request timeout.
-        await pollJob(job_id);
+        currentJobId = job_id;
+        startPolling(job_id);
 
     } catch (err) {
         showError(err.message);
@@ -252,49 +261,163 @@ translateForm.addEventListener('submit', async (e) => {
     }
 });
 
-function pollJob(jobId) {
-    return new Promise((resolve, reject) => {
-        if (pollInterval) clearInterval(pollInterval);
+// ---------------------------------------------------------------------------
+// Polling: pipeline pausuz pausu doa, eta erabiltzailearen onarpenaren zain
+// gelditzen da urrats bakoitzaren ondoren (transkripzioa, itzulpena,
+// sintesia). Job-aren egoerak dio zein card erakutsi.
+// ---------------------------------------------------------------------------
+function startPolling(jobId) {
+    if (pollInterval) clearInterval(pollInterval);
 
-        pollInterval = setInterval(async () => {
-            try {
-                const res = await fetch(`${API_BASE}/api/job/${jobId}`);
-                const data = await res.json();
+    pollInterval = setInterval(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/job/${jobId}`);
+            const data = await res.json();
 
-                updateProgress(data.step, data.progress, data.detail);
+            updateProgress(data.state, data.progress, data.detail);
 
-                if (data.step === 'completed') {
-                    clearInterval(pollInterval);
-                    pollInterval = null;
+            switch (data.state) {
+                case 'awaiting_transcript_review':
+                    stopPolling();
+                    transcriptSrtEditor.value = data.srt || '';
+                    progressCard.style.display = 'none';
+                    transcriptReviewCard.style.display = 'block';
+                    submitBtn.disabled = false;
+                    break;
+
+                case 'awaiting_translation_review':
+                    stopPolling();
+                    translationSrtViewer.value = data.srt_translated || '';
+                    progressCard.style.display = 'none';
+                    translationReviewCard.style.display = 'block';
+                    break;
+
+                case 'awaiting_synthesis_review':
+                    stopPolling();
+                    progressCard.style.display = 'none';
+                    synthesisReviewCard.style.display = 'block';
+                    break;
+
+                case 'completed': {
+                    stopPolling();
                     markAllStepsDone();
-
                     const result = data.result || {};
                     originalText.textContent = result.transcription || '(ez dago testurik)';
                     translatedText.textContent = result.translated_text || '(ez dago testurik)';
                     downloadBtn.href = result.download_url;
-
-                    submitBtn.disabled = false;
                     setTimeout(() => {
                         progressCard.style.display = 'none';
                         resultsCard.style.display = 'block';
-                    }, 1000);
-
-                    resolve();
-                } else if (data.step === 'error') {
-                    clearInterval(pollInterval);
-                    pollInterval = null;
-                    submitBtn.disabled = false;
-                    reject(new Error(data.detail || 'Translation failed'));
+                    }, 800);
+                    break;
                 }
-            } catch (err) {
-                clearInterval(pollInterval);
-                pollInterval = null;
-                submitBtn.disabled = false;
-                reject(err);
+
+                case 'error':
+                    stopPolling();
+                    submitBtn.disabled = false;
+                    showError(data.detail || 'Translation failed');
+                    progressCard.style.display = 'none';
+                    break;
             }
-        }, 1500);
-    });
+        } catch (err) {
+            stopPolling();
+            submitBtn.disabled = false;
+            showError(err.message);
+        }
+    }, 1500);
 }
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Urrats-1 onarpena: SRT (agian editatua) bidali eta itzulpena abiarazi
+// ---------------------------------------------------------------------------
+approveTranscriptBtn.addEventListener('click', async () => {
+    if (!currentJobId) return;
+    approveTranscriptBtn.disabled = true;
+    try {
+        const putRes = await fetch(`${API_BASE}/api/job/${currentJobId}/srt`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ srt: transcriptSrtEditor.value }),
+        });
+        if (!putRes.ok) {
+            const err = await putRes.json().catch(() => ({ detail: putRes.statusText }));
+            throw new Error(err.detail || 'SRT ez da onartu');
+        }
+
+        const approveRes = await fetch(`${API_BASE}/api/job/${currentJobId}/approve`, {
+            method: 'POST',
+        });
+        if (!approveRes.ok) {
+            const err = await approveRes.json().catch(() => ({ detail: approveRes.statusText }));
+            throw new Error(err.detail || 'Ezin izan da itzulpena abiarazi');
+        }
+
+        transcriptReviewCard.style.display = 'none';
+        progressCard.style.display = 'block';
+        startPolling(currentJobId);
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        approveTranscriptBtn.disabled = false;
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Urrats-2 onarpena: itzulpena onartu, ahotsa sortu
+// ---------------------------------------------------------------------------
+approveTranslationBtn.addEventListener('click', async () => {
+    if (!currentJobId) return;
+    approveTranslationBtn.disabled = true;
+    try {
+        const approveRes = await fetch(`${API_BASE}/api/job/${currentJobId}/approve`, {
+            method: 'POST',
+        });
+        if (!approveRes.ok) {
+            const err = await approveRes.json().catch(() => ({ detail: approveRes.statusText }));
+            throw new Error(err.detail || 'Ezin izan da ahotsa abiarazi');
+        }
+
+        translationReviewCard.style.display = 'none';
+        progressCard.style.display = 'block';
+        startPolling(currentJobId);
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        approveTranslationBtn.disabled = false;
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Urrats-3 onarpena: ahotsa onartu, bideo finala sortu
+// ---------------------------------------------------------------------------
+approveSynthesisBtn.addEventListener('click', async () => {
+    if (!currentJobId) return;
+    approveSynthesisBtn.disabled = true;
+    try {
+        const approveRes = await fetch(`${API_BASE}/api/job/${currentJobId}/approve`, {
+            method: 'POST',
+        });
+        if (!approveRes.ok) {
+            const err = await approveRes.json().catch(() => ({ detail: approveRes.statusText }));
+            throw new Error(err.detail || 'Ezin izan da bideo finala abiarazi');
+        }
+
+        synthesisReviewCard.style.display = 'none';
+        progressCard.style.display = 'block';
+        startPolling(currentJobId);
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        approveSynthesisBtn.disabled = false;
+    }
+});
 
 // ---------------------------------------------------------------------------
 // Progress
@@ -351,12 +474,16 @@ retryBtn.addEventListener('click', () => {
 
 newTranslationBtn.addEventListener('click', () => {
     resultsCard.style.display = 'none';
+    transcriptReviewCard.style.display = 'none';
+    translationReviewCard.style.display = 'none';
+    synthesisReviewCard.style.display = 'none';
+    currentJobId = null;
     clearFile();
     resetProgress();
 });
 
 // ---------------------------------------------------------------------------
-// Progress reporting is now REAL, not simulated: see pollJob() above, which
+// Progress reporting is now REAL, not simulated: see startPolling() above, which
 // polls GET /api/job/{job_id} while the backend runs the pipeline as a
 // background task. This replaces the old simulateProgress() timer-based
 // fake progress bar, which was needed only because /api/translate used to

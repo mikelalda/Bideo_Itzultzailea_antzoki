@@ -128,6 +128,44 @@
             </div>
         </div>
 
+        <!-- Transcript review (urrats-1: SRT editagarria, itzuli aurretik) -->
+        <div class="card review-card" id="transcriptReviewCard" style="display: none;">
+            <h3>1. Berrikusi transkripzioa</h3>
+            <p class="review-hint">
+                Zuzendu behar duzun testua SRT formatuan dago. Editatu eta,
+                gustura zaudenean, onartu itzultzeko.
+            </p>
+            <textarea id="transcriptSrtEditor" class="srt-editor" spellcheck="false"></textarea>
+            <div class="result-actions">
+                <button type="button" class="btn-primary" id="approveTranscriptBtn">
+                    ✅ Onartu eta itzuli
+                </button>
+            </div>
+        </div>
+
+        <!-- Translation review (urrats-2: SRT itzulia, irakurtzeko) -->
+        <div class="card review-card" id="translationReviewCard" style="display: none;">
+            <h3>2. Berrikusi itzulpena</h3>
+            <p class="review-hint">Itzulpena honela geratu da. Onartzen baduzu, ahotsa sortuko da.</p>
+            <textarea id="translationSrtViewer" class="srt-editor" readonly spellcheck="false"></textarea>
+            <div class="result-actions">
+                <button type="button" class="btn-primary" id="approveTranslationBtn">
+                    ✅ Onartu eta ahotsa sortu
+                </button>
+            </div>
+        </div>
+
+        <!-- Synthesis review (urrats-3: ahotsa sortuta, bideoa falta) -->
+        <div class="card review-card" id="synthesisReviewCard" style="display: none;">
+            <h3>3. Ahotsa sortuta</h3>
+            <p class="review-hint">Ahotsa sortu da. Onartzen baduzu, bideo finala sortuko da.</p>
+            <div class="result-actions">
+                <button type="button" class="btn-primary" id="approveSynthesisBtn">
+                    ✅ Onartu eta bideoa sortu
+                </button>
+            </div>
+        </div>
+
         <!-- Results -->
         <div class="card results-card" id="resultsCard" style="display: none;">
             <h3>Emaitza</h3>
