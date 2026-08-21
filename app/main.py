@@ -261,15 +261,11 @@ async def translate_video(
     voice: str = Form("antton", description="TTS voice name"),
 ):
     """
-    Translate a video from one language to another.
-
-    Pipeline:
-    1. Extract audio from video
-    2. Transcribe audio (Whisper API)
-    3. Translate text (MarianMT)
-    4. Synthesize translated text (aHoTTS API)
-    5. Adjust speed to match original timing
-    6. Replace audio in video
+    Kicks off the translation pipeline in the background and returns
+    immediately with a job_id. The HF Spaces front proxy kills HTTP
+    requests that stay open too long (~60s), so this endpoint must NOT
+    block until the whole pipeline finishes -- the client polls
+    GET /api/job/{job_id} instead (see process_translation below).
     """
     if source_lang not in ("es", "eu"):
         raise HTTPException(400, "source_lang must be 'es' or 'eu'")
@@ -281,13 +277,44 @@ async def translate_video(
     job_id = str(uuid.uuid4())[:8]
     update_job(job_id, "uploading", 5, "Uploading video...")
 
-    # Save uploaded video
+    # Save uploaded video (fast; safe to do inline before responding)
     video_ext = os.path.splitext(file.filename or "video.mp4")[1] or ".mp4"
     video_path = str(UPLOAD_DIR / f"{job_id}{video_ext}")
     with open(video_path, "wb") as f:
         content = await file.read()
         f.write(content)
 
+    # Run the actual pipeline in the background; the request returns now.
+    asyncio.create_task(
+        process_translation(
+            job_id, video_path, video_ext, source_lang, target_lang, voice
+        )
+    )
+
+    return JSONResponse({"success": True, "job_id": job_id})
+
+
+async def process_translation(
+    job_id: str,
+    video_path: str,
+    video_ext: str,
+    source_lang: str,
+    target_lang: str,
+    voice: str,
+):
+    """
+    The actual translation pipeline (STT -> MT -> TTS -> mux), run as a
+    background task. Progress and the final result are written into
+    job_status[job_id], which the client reads via GET /api/job/{job_id}.
+
+    Pipeline:
+    1. Extract audio from video
+    2. Transcribe audio (Whisper API)
+    3. Translate text (MarianMT)
+    4. Synthesize translated text (aHoTTS API)
+    5. Adjust speed to match original timing
+    6. Replace audio in video
+    """
     try:
         # STEP 1: Extract audio
         update_job(job_id, "extracting_audio", 10, "Extracting audio from video...")
@@ -452,8 +479,6 @@ async def translate_video(
         output_path = str(OUTPUT_DIR / output_filename)
         replace_audio_in_video(video_path, final_audio_path, output_path)
 
-        update_job(job_id, "completed", 100, "Translation complete!")
-
         # Cleanup temp files
         for p in TEMP_DIR.glob(f"{job_id}_*"):
             try:
@@ -461,18 +486,25 @@ async def translate_video(
             except OSError:
                 pass
 
-        return JSONResponse({
-            "success": True,
-            "job_id": job_id,
-            "download_url": f"/api/download/{output_filename}",
-            "transcription": transcription.get("text", ""),
-            "translated_text": " ".join(c["text"] for c in translated_chunks),
-        })
+        # Store the final result alongside the job status (no HTTP response
+        # to return to here -- this runs as a detached background task).
+        job_status[job_id] = {
+            "step": "completed",
+            "progress": 100,
+            "detail": "Translation complete!",
+            "result": {
+                "success": True,
+                "job_id": job_id,
+                "download_url": f"/api/download/{output_filename}",
+                "transcription": transcription.get("text", ""),
+                "translated_text": " ".join(c["text"] for c in translated_chunks),
+            },
+        }
+        logger.info(f"[{job_id}] completed (100%): Translation complete!")
 
     except Exception as e:
         update_job(job_id, "error", -1, str(e))
         logger.exception(f"Translation failed for job {job_id}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/download/{filename}")

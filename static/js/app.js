@@ -225,6 +225,10 @@ translateForm.addEventListener('submit', async (e) => {
     resetProgress();
 
     try {
+        // 1) Kick off the job. This returns almost instantly (the actual
+        //    pipeline runs in the background on the server) -- it does NOT
+        //    wait for the translation to finish, so it never hits the HF
+        //    Spaces proxy's ~60s timeout on long HTTP requests.
         const res = await fetch(`${API_BASE}/api/translate`, {
             method: 'POST',
             body: formData,
@@ -235,28 +239,62 @@ translateForm.addEventListener('submit', async (e) => {
             throw new Error(err.detail || 'Translation failed');
         }
 
-        const data = await res.json();
+        const { job_id } = await res.json();
 
-        // Show results
-        updateProgress('completed', 100, 'Itzulpena amaituta!');
-        markAllStepsDone();
-
-        originalText.textContent = data.transcription || '(ez dago testurik)';
-        translatedText.textContent = data.translated_text || '(ez dago testurik)';
-        downloadBtn.href = data.download_url;
-
-        setTimeout(() => {
-            progressCard.style.display = 'none';
-            resultsCard.style.display = 'block';
-        }, 1000);
+        // 2) Poll the job status until it's done or fails. Each poll is a
+        //    tiny, fast request, so it's immune to the long-request timeout.
+        await pollJob(job_id);
 
     } catch (err) {
         showError(err.message);
         progressCard.style.display = 'none';
-    } finally {
         submitBtn.disabled = false;
     }
 });
+
+function pollJob(jobId) {
+    return new Promise((resolve, reject) => {
+        if (pollInterval) clearInterval(pollInterval);
+
+        pollInterval = setInterval(async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/job/${jobId}`);
+                const data = await res.json();
+
+                updateProgress(data.step, data.progress, data.detail);
+
+                if (data.step === 'completed') {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    markAllStepsDone();
+
+                    const result = data.result || {};
+                    originalText.textContent = result.transcription || '(ez dago testurik)';
+                    translatedText.textContent = result.translated_text || '(ez dago testurik)';
+                    downloadBtn.href = result.download_url;
+
+                    submitBtn.disabled = false;
+                    setTimeout(() => {
+                        progressCard.style.display = 'none';
+                        resultsCard.style.display = 'block';
+                    }, 1000);
+
+                    resolve();
+                } else if (data.step === 'error') {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                    submitBtn.disabled = false;
+                    reject(new Error(data.detail || 'Translation failed'));
+                }
+            } catch (err) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+                submitBtn.disabled = false;
+                reject(err);
+            }
+        }, 1500);
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Progress
@@ -318,43 +356,9 @@ newTranslationBtn.addEventListener('click', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Progress polling using XHR upload progress for large files
-// ---------------------------------------------------------------------------
-// The main form submission already handles progress via the fetch response.
-// For real-time progress during long translations, we poll the job status.
-// However, since the translate endpoint is synchronous (returns when done),
-// we use a simulated progress approach based on the request duration.
-
-// Enhance the form submission with XHR for upload progress tracking
-const originalSubmitHandler = translateForm.onsubmit;
-
-function simulateProgress() {
-    let progress = 5;
-    const steps = [
-        { step: 'uploading', progress: 10, text: 'Bideoa igotzen...', delay: 500 },
-        { step: 'extracting_audio', progress: 15, text: 'Audioa ateratzen...', delay: 2000 },
-        { step: 'transcribing', progress: 25, text: 'Audioa transkribatzen...', delay: 3000 },
-        { step: 'translating', progress: 45, text: 'Testua itzultzen...', delay: 5000 },
-        { step: 'synthesizing', progress: 65, text: 'Ahotsa sintetizatzen...', delay: 8000 },
-        { step: 'combining', progress: 85, text: 'Audio segmentuak konbinatzen...', delay: 12000 },
-        { step: 'finalizing', progress: 92, text: 'Bideo finala sortzen...', delay: 15000 },
-    ];
-
-    steps.forEach(s => {
-        setTimeout(() => {
-            if (progressCard.style.display !== 'none') {
-                updateProgress(s.step, s.progress, s.text);
-            }
-        }, s.delay);
-    });
-}
-
-// Override form submit to add progress simulation
-const form = document.getElementById('translateForm');
-form.removeEventListener('submit', () => {});
-
-// Patch: add progress simulation when form is submitted
-const origBtnClick = submitBtn.onclick;
-translateForm.addEventListener('submit', () => {
-    simulateProgress();
-}, { capture: true });
+// Progress reporting is now REAL, not simulated: see pollJob() above, which
+// polls GET /api/job/{job_id} while the backend runs the pipeline as a
+// background task. This replaces the old simulateProgress() timer-based
+// fake progress bar, which was needed only because /api/translate used to
+// block until the whole pipeline finished (and got killed by the HF Spaces
+// proxy's ~60s timeout on long-running requests).
