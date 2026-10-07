@@ -62,7 +62,7 @@ async def download_models():
 @app.post("/synthesize")
 async def synthesize(request: SynthesizeRequest):
     try:
-        output_path = await antzoki_engine.synthesize(request.text)
+        output_path = await antzoki_engine.synthesize(request.text, request.duration)
         return FileResponse(
             output_path,
             media_type="audio/wav",

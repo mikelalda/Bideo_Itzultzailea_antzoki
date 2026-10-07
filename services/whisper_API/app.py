@@ -22,7 +22,7 @@ import librosa
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL_ID = os.getenv("MODEL_ID", "xezpeleta/whisper-large-v3-eu")
+MODEL_ID = os.getenv("MODEL_ID", "openai/whisper-large-v3-turbo")
 DEVICE = os.getenv("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
 TORCH_DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "16"))
@@ -105,7 +105,7 @@ app = FastAPI(
     title="Whisper API (eu/es/en)",
     description=(
         "API de transcripción de voz a texto utilizando el modelo "
-        "xezpeleta/whisper-large-v3-eu. Soporta euskera, castellano e inglés."
+        "xezpeleta/whisper-large-v3-eu. Soporta euskera, gaztelera eta  ingelesa."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -169,7 +169,7 @@ async def transcribe(
     file: UploadFile = File(..., description="Audio file (wav, mp3, ogg, flac, m4a…)"),
     language: Optional[str] = Form(
         None,
-        description="Language code: 'eu' (euskera), 'es' (castellano), 'en' (english). "
+        description="Language code: 'eu' (euskera), 'es' (gaztelera), 'en' (ingelesa). "
                     "If omitted the model will auto-detect.",
     ),
     task: Optional[str] = Form(

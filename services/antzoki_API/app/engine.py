@@ -97,7 +97,7 @@ class AntzokiEngine:
             raise RuntimeError("Antzoki requires an NVIDIA GPU with CUDA")
         await asyncio.to_thread(self._download_models)
 
-    async def synthesize(self, text: str) -> str:
+    async def synthesize(self, text: str, duration: float | None = None) -> str:
         if not torch.cuda.is_available():
             raise RuntimeError("Antzoki requires an NVIDIA GPU with CUDA")
 
@@ -125,6 +125,8 @@ class AntzokiEngine:
                 "--steps", "30",
                 "--fps", "25",
             ]
+            if duration is not None:
+                command.extend(["--gen-duration", f"{duration:.3f}"])
             logger.info("Starting Antzoki synthesis for %d characters", len(text))
             process = await asyncio.create_subprocess_exec(
                 *command,

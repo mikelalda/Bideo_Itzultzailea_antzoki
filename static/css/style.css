@@ -389,23 +389,102 @@ select:focus {
     line-height: 1.4;
 }
 
-.srt-editor {
+.subtitle-editor {
     width: 100%;
-    min-height: 260px;
+    max-height: 420px;
+    overflow-y: auto;
     background: var(--bg);
-    color: var(--text);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0.75rem 1rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.85rem;
-    line-height: 1.5;
-    resize: vertical;
-    box-sizing: border-box;
 }
 
-.srt-editor[readonly] {
-    opacity: 0.85;
+.subtitle-editor-header,
+.subtitle-row {
+    display: grid;
+    grid-template-columns: 2rem 6.5rem 6.5rem minmax(12rem, 1fr) 2.5rem;
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.55rem 0.65rem;
+}
+
+.subtitle-editor-header {
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.subtitle-row + .subtitle-row {
+    border-top: 1px solid var(--border);
+}
+
+.subtitle-number {
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    text-align: center;
+}
+
+.subtitle-time,
+.subtitle-text {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+    padding: 0.5rem;
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.subtitle-time {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.subtitle-text {
+    min-height: 3.3rem;
+    line-height: 1.35;
+    resize: vertical;
+}
+
+.subtitle-time:focus,
+.subtitle-text:focus {
+    border-color: var(--primary);
+    outline: 2px solid color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.subtitle-delete {
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--error);
+    cursor: pointer;
+    font-size: 1.4rem;
+}
+
+.subtitle-delete:hover {
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+}
+
+@media (max-width: 680px) {
+    .subtitle-editor-header {
+        display: none;
+    }
+
+    .subtitle-row {
+        grid-template-columns: 2rem 1fr 1fr 2.5rem;
+    }
+
+    .subtitle-text {
+        grid-column: 2 / 5;
+    }
+
+    .subtitle-delete {
+        grid-column: 4;
+        grid-row: 1;
+    }
 }
 
 .btn-download {

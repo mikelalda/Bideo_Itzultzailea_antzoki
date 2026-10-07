@@ -1,7 +1,7 @@
 # =============================================================================
 # Bideo Itzultzailea - Video Translation Backend
 # Orchestrates: Whisper (STT) → Translation → aHoTTS (TTS)
-# Supports: Castellano ↔ Euskera
+# Supports: Gaztelera ↔ Euskera
 # =============================================================================
 
 import os
@@ -146,7 +146,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="Bideo Itzultzailea",
-    description="Sistema de traducción de vídeo Castellano ↔ Euskera",
+    description="Gaztelera ↔ Euskera bideo itzulpen sistema",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -186,24 +186,6 @@ def extract_audio(video_path: str, audio_path: str) -> float:
     probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
     duration = float(probe_result.stdout.strip())
     return duration
-
-
-def adjust_audio_speed(input_path: str, output_path: str, speed_factor: float):
-    """Adjust audio speed using ffmpeg atempo filter."""
-    if speed_factor < 0.5:
-        speed_factor = 0.5
-    if speed_factor > 2.0:
-        speed_factor = 2.0
-
-    # atempo only supports 0.5 to 2.0, chain filters for wider range
-    cmd = [
-        "ffmpeg", "-y", "-i", input_path,
-        "-filter:a", f"atempo={speed_factor}",
-        "-vn", output_path
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg speed adjust failed: {result.stderr}")
 
 
 def get_audio_duration(audio_path: str) -> float:
@@ -318,6 +300,45 @@ class SrtUpdate(BaseModel):
     srt: str
 
 
+class SubtitleItem(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class SubtitleUpdate(BaseModel):
+    subtitles: list[SubtitleItem]
+
+
+def chunks_to_subtitles(chunks: list) -> list[dict]:
+    subtitles = []
+    for chunk in chunks:
+        timestamp = chunk.get("timestamp") or [0, 0]
+        start = timestamp[0] if timestamp[0] is not None else 0.0
+        end = timestamp[1] if len(timestamp) > 1 and timestamp[1] is not None else start + 2.0
+        subtitles.append({"start": start, "end": end, "text": chunk.get("text", "")})
+    return subtitles
+
+
+def validate_subtitles(items: list[SubtitleItem]) -> list[dict]:
+    if not items:
+        raise HTTPException(400, "Gutxienez azpititulu bat behar da")
+
+    chunks = []
+    previous_start = -1.0
+    for index, item in enumerate(items, start=1):
+        text = item.text.strip()
+        if item.start < 0 or item.end <= item.start:
+            raise HTTPException(400, f"{index}. azpitituluaren denbora baliogabea da")
+        if item.start < previous_start:
+            raise HTTPException(400, "Azpitituluak hasiera-denboraren arabera ordenatu behar dira")
+        if not text:
+            raise HTTPException(400, f"{index}. azpitituluak ez du testurik")
+        chunks.append({"text": text, "timestamp": [item.start, item.end]})
+        previous_start = item.start
+    return chunks
+
+
 @app.get("/api/job/{job_id}")
 async def get_job_status(job_id: str):
     """
@@ -335,8 +356,10 @@ async def get_job_status(job_id: str):
     }
     if job.get("state") == "awaiting_transcript_review":
         response["srt"] = job.get("srt", "")
+        response["subtitles"] = chunks_to_subtitles(job.get("chunks", []))
     if job.get("state") == "awaiting_translation_review":
         response["srt_translated"] = job.get("srt_translated", "")
+        response["subtitles"] = chunks_to_subtitles(job.get("translated_chunks", []))
     if job.get("state") == "completed":
         response["result"] = job.get("result")
     return response
@@ -365,6 +388,28 @@ async def update_job_srt(job_id: str, body: SrtUpdate):
     job["chunks"] = chunks
     job["srt"] = body.srt
     return {"success": True}
+
+
+@app.put("/api/job/{job_id}/subtitles")
+async def update_job_subtitles(job_id: str, body: SubtitleUpdate):
+    if job_id not in job_status:
+        raise HTTPException(404, "Job not found")
+
+    job = job_status[job_id]
+    state = job.get("state")
+    chunks = validate_subtitles(body.subtitles)
+    if state == "awaiting_transcript_review":
+        job["chunks"] = chunks
+        job["srt"] = chunks_to_srt(chunks)
+    elif state == "awaiting_translation_review":
+        job["translated_chunks"] = chunks
+        job["srt_translated"] = chunks_to_srt(chunks)
+    else:
+        raise HTTPException(
+            400,
+            f"Job ez dago azpitituluak berrikusteko egoeran (egungo egoera: {state})",
+        )
+    return {"success": True, "subtitles": chunks_to_subtitles(chunks)}
 
 
 @app.post("/api/job/{job_id}/approve")
@@ -550,7 +595,7 @@ async def run_synthesis(job_id: str):
 
         segment_paths = []
         async with httpx.AsyncClient(timeout=600.0) as client:
-            prev_end = 0.0
+            timeline_cursor = 0.0
             for i, chunk in enumerate(translated_chunks):
                 progress = 60 + int(20 * (i / max(len(translated_chunks), 1)))
                 update_job(
@@ -559,19 +604,27 @@ async def run_synthesis(job_id: str):
                 )
 
                 ts = chunk["timestamp"]
-                chunk_start = ts[0] if ts[0] is not None else prev_end
+                chunk_start = ts[0] if ts[0] is not None else timeline_cursor
                 chunk_end = ts[1] if ts[1] is not None else chunk_start + 3.0
                 chunk_duration = max(chunk_end - chunk_start, 0.5)
 
-                gap = chunk_start - prev_end
+                gap = chunk_start - timeline_cursor
                 if gap > 0.1:
                     silence_path = str(TEMP_DIR / f"{job_id}_silence_{i}.wav")
                     generate_silence(gap, silence_path)
                     segment_paths.append(silence_path)
+                    timeline_cursor += gap
 
+                synth_payload = {
+                    "text": chunk["text"],
+                    "language": target_lang,
+                    "voice": voice,
+                }
+                if target_lang == "eu":
+                    synth_payload["duration"] = chunk_duration
                 synth_response = await client.post(
                     f"{tts_api_url}/synthesize",
-                    json={"text": chunk["text"], "language": target_lang, "voice": voice},
+                    json=synth_payload,
                 )
 
                 if synth_response.status_code != 200:
@@ -579,7 +632,7 @@ async def run_synthesis(job_id: str):
                     silence_path = str(TEMP_DIR / f"{job_id}_fail_{i}.wav")
                     generate_silence(chunk_duration, silence_path)
                     segment_paths.append(silence_path)
-                    prev_end = chunk_end
+                    timeline_cursor += chunk_duration
                     continue
 
                 raw_synth_path = str(TEMP_DIR / f"{job_id}_synth_{i}.wav")
@@ -587,23 +640,12 @@ async def run_synthesis(job_id: str):
                     sf.write(synth_response.content)
 
                 synth_duration = get_audio_duration(raw_synth_path)
-                if synth_duration > 0 and chunk_duration > 0:
-                    speed_factor = synth_duration / chunk_duration
-                    if abs(speed_factor - 1.0) > 0.1:
-                        adjusted_path = str(TEMP_DIR / f"{job_id}_adjusted_{i}.wav")
-                        speed_factor = max(0.5, min(2.0, speed_factor))
-                        adjust_audio_speed(raw_synth_path, adjusted_path, speed_factor)
-                        segment_paths.append(adjusted_path)
-                    else:
-                        segment_paths.append(raw_synth_path)
-                else:
-                    segment_paths.append(raw_synth_path)
+                segment_paths.append(raw_synth_path)
+                timeline_cursor += synth_duration if synth_duration > 0 else chunk_duration
 
-                prev_end = chunk_end
-
-            if prev_end < video_duration:
+            if timeline_cursor < video_duration:
                 trailing_silence = str(TEMP_DIR / f"{job_id}_trailing.wav")
-                generate_silence(video_duration - prev_end, trailing_silence)
+                generate_silence(video_duration - timeline_cursor, trailing_silence)
                 segment_paths.append(trailing_silence)
 
         update_job(job_id, "combining", 82, "Audio zatiak konbinatzen...")

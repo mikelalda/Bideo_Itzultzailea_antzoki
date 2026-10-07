@@ -36,10 +36,10 @@ const retryBtn = document.getElementById('retryBtn');
 
 // Step-by-step review cards
 const transcriptReviewCard = document.getElementById('transcriptReviewCard');
-const transcriptSrtEditor = document.getElementById('transcriptSrtEditor');
+const transcriptSubtitleEditor = document.getElementById('transcriptSubtitleEditor');
 const approveTranscriptBtn = document.getElementById('approveTranscriptBtn');
 const translationReviewCard = document.getElementById('translationReviewCard');
-const translationSrtViewer = document.getElementById('translationSrtViewer');
+const translationSubtitleEditor = document.getElementById('translationSubtitleEditor');
 const approveTranslationBtn = document.getElementById('approveTranslationBtn');
 const synthesisReviewCard = document.getElementById('synthesisReviewCard');
 const approveSynthesisBtn = document.getElementById('approveSynthesisBtn');
@@ -283,7 +283,7 @@ function startPolling(jobId) {
             switch (data.state) {
                 case 'awaiting_transcript_review':
                     stopPolling();
-                    transcriptSrtEditor.value = data.srt || '';
+                    renderSubtitleEditor(transcriptSubtitleEditor, data.subtitles || []);
                     progressCard.style.display = 'none';
                     transcriptReviewCard.style.display = 'block';
                     submitBtn.disabled = false;
@@ -291,7 +291,7 @@ function startPolling(jobId) {
 
                 case 'awaiting_translation_review':
                     stopPolling();
-                    translationSrtViewer.value = data.srt_translated || '';
+                    renderSubtitleEditor(translationSubtitleEditor, data.subtitles || []);
                     progressCard.style.display = 'none';
                     translationReviewCard.style.display = 'block';
                     break;
@@ -338,22 +338,112 @@ function stopPolling() {
     }
 }
 
+function createSubtitleRow(subtitle, index) {
+    const row = document.createElement('div');
+    row.className = 'subtitle-row';
+
+    const number = document.createElement('span');
+    number.className = 'subtitle-number';
+    number.textContent = index + 1;
+
+    const start = document.createElement('input');
+    start.type = 'number';
+    start.className = 'subtitle-time subtitle-start';
+    start.min = '0';
+    start.step = '0.001';
+    start.value = Number(subtitle.start || 0).toFixed(3);
+    start.setAttribute('aria-label', `${index + 1}. azpitituluaren hasiera`);
+
+    const end = document.createElement('input');
+    end.type = 'number';
+    end.className = 'subtitle-time subtitle-end';
+    end.min = '0.001';
+    end.step = '0.001';
+    end.value = Number(subtitle.end || 2).toFixed(3);
+    end.setAttribute('aria-label', `${index + 1}. azpitituluaren amaiera`);
+
+    const text = document.createElement('textarea');
+    text.className = 'subtitle-text';
+    text.rows = 2;
+    text.value = subtitle.text || '';
+    text.setAttribute('aria-label', `${index + 1}. azpitituluaren testua`);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'subtitle-delete';
+    remove.textContent = '×';
+    remove.title = 'Azpititulua ezabatu';
+    remove.setAttribute('aria-label', `${index + 1}. azpititulua ezabatu`);
+    remove.addEventListener('click', () => {
+        const editor = row.parentElement;
+        row.remove();
+        renumberSubtitleRows(editor);
+    });
+
+    row.append(number, start, end, text, remove);
+    return row;
+}
+
+function renderSubtitleEditor(editor, subtitles) {
+    editor.replaceChildren();
+    subtitles.forEach((subtitle, index) => {
+        editor.appendChild(createSubtitleRow(subtitle, index));
+    });
+}
+
+function renumberSubtitleRows(editor) {
+    [...editor.querySelectorAll('.subtitle-row')].forEach((row, index) => {
+        row.querySelector('.subtitle-number').textContent = index + 1;
+    });
+}
+
+function addSubtitle(editor) {
+    const rows = editor.querySelectorAll('.subtitle-row');
+    const lastEnd = rows.length
+        ? Number(rows[rows.length - 1].querySelector('.subtitle-end').value)
+        : 0;
+    editor.appendChild(createSubtitleRow({ start: lastEnd, end: lastEnd + 2, text: '' }, rows.length));
+    editor.lastElementChild.querySelector('.subtitle-text').focus();
+}
+
+function collectSubtitles(editor) {
+    const subtitles = [...editor.querySelectorAll('.subtitle-row')].map((row, index) => {
+        const start = Number(row.querySelector('.subtitle-start').value);
+        const end = Number(row.querySelector('.subtitle-end').value);
+        const text = row.querySelector('.subtitle-text').value.trim();
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || !text) {
+            throw new Error(`${index + 1}. azpititulua osatu eta denborak zuzendu.`);
+        }
+        return { start, end, text };
+    });
+    if (!subtitles.length) throw new Error('Gutxienez azpititulu bat behar da.');
+    return subtitles;
+}
+
+async function saveSubtitles(editor) {
+    const res = await fetch(`${API_BASE}/api/job/${currentJobId}/subtitles`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subtitles: collectSubtitles(editor) }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || 'Azpitituluak ezin izan dira gorde');
+    }
+}
+
+document.querySelectorAll('.add-subtitle-btn').forEach(button => {
+    button.addEventListener('click', () => addSubtitle(document.getElementById(button.dataset.editor)));
+});
+
 // ---------------------------------------------------------------------------
-// Urrats-1 onarpena: SRT (agian editatua) bidali eta itzulpena abiarazi
+// Urrats-1 onarpena: azpitituluak bidali eta itzulpena abiarazi
 // ---------------------------------------------------------------------------
 approveTranscriptBtn.addEventListener('click', async () => {
     if (!currentJobId) return;
     approveTranscriptBtn.disabled = true;
     try {
-        const putRes = await fetch(`${API_BASE}/api/job/${currentJobId}/srt`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ srt: transcriptSrtEditor.value }),
-        });
-        if (!putRes.ok) {
-            const err = await putRes.json().catch(() => ({ detail: putRes.statusText }));
-            throw new Error(err.detail || 'SRT ez da onartu');
-        }
+        await saveSubtitles(transcriptSubtitleEditor);
 
         const approveRes = await fetch(`${API_BASE}/api/job/${currentJobId}/approve`, {
             method: 'POST',
@@ -380,6 +470,8 @@ approveTranslationBtn.addEventListener('click', async () => {
     if (!currentJobId) return;
     approveTranslationBtn.disabled = true;
     try {
+        await saveSubtitles(translationSubtitleEditor);
+
         const approveRes = await fetch(`${API_BASE}/api/job/${currentJobId}/approve`, {
             method: 'POST',
         });

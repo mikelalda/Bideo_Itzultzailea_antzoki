@@ -7,6 +7,7 @@ class SynthesizeRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH)
     language: str = Field(..., pattern="^eu$")
     voice: str = Field("antzoki", pattern="^antzoki$")
+    duration: float | None = Field(None, gt=0, le=45)
 
 
 class HealthResponse(BaseModel):

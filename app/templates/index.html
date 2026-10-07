@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bideo Itzultzailea - Video Translator</title>
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261007-2">
 </head>
 <body>
     <div class="container">
         <!-- Header -->
         <header class="header">
             <h1>🎬 Bideo Itzultzailea</h1>
-            <p class="subtitle">Bideoen itzulpen sistema — Castellano ↔ Euskera</p>
+            <p class="subtitle">Bideoen itzulpen sistema — Gaztelera ↔ Euskera</p>
         </header>
 
         <!-- Service Status -->
@@ -60,8 +60,8 @@
                     <div class="form-group">
                         <label for="sourceLang">Jatorrizko hizkuntza</label>
                         <select id="sourceLang" required>
-                            <option value="es">🇪🇸 Castellano</option>
-                            <option value="eu">🇺🇾 Euskera</option>
+                            <option value="es"> Gaztelera</option>
+                            <option value="eu"> Euskera</option>
                         </select>
                     </div>
 
@@ -72,8 +72,8 @@
                     <div class="form-group">
                         <label for="targetLang">Helburu hizkuntza</label>
                         <select id="targetLang" required>
-                            <option value="eu">🇺🇾 Euskera</option>
-                            <option value="es">🇪🇸 Castellano</option>
+                            <option value="eu"> Euskera</option>
+                            <option value="es"> Gaztelera</option>
                         </select>
                     </div>
                 </div>
@@ -136,11 +136,16 @@
         <div class="card review-card" id="transcriptReviewCard" style="display: none;">
             <h3>1. Berrikusi transkripzioa</h3>
             <p class="review-hint">
-                Zuzendu behar duzun testua SRT formatuan dago. Editatu eta,
-                gustura zaudenean, onartu itzultzeko.
+                Zuzendu denborak edo testua, eta onartu itzultzeko.
             </p>
-            <textarea id="transcriptSrtEditor" class="srt-editor" spellcheck="false"></textarea>
+            <div class="subtitle-editor-header" aria-hidden="true">
+                <span>#</span><span>Hasiera</span><span>Amaiera</span><span>Testua</span><span></span>
+            </div>
+            <div id="transcriptSubtitleEditor" class="subtitle-editor"></div>
             <div class="result-actions">
+                <button type="button" class="btn-secondary add-subtitle-btn" data-editor="transcriptSubtitleEditor">
+                    + Azpititulua
+                </button>
                 <button type="button" class="btn-primary" id="approveTranscriptBtn">
                     ✅ Onartu eta itzuli
                 </button>
@@ -150,9 +155,15 @@
         <!-- Translation review (urrats-2: SRT itzulia, irakurtzeko) -->
         <div class="card review-card" id="translationReviewCard" style="display: none;">
             <h3>2. Berrikusi itzulpena</h3>
-            <p class="review-hint">Itzulpena honela geratu da. Onartzen baduzu, ahotsa sortuko da.</p>
-            <textarea id="translationSrtViewer" class="srt-editor" readonly spellcheck="false"></textarea>
+            <p class="review-hint">Zuzendu itzulpena edo denborak ahotsa sortu aurretik.</p>
+            <div class="subtitle-editor-header" aria-hidden="true">
+                <span>#</span><span>Hasiera</span><span>Amaiera</span><span>Testua</span><span></span>
+            </div>
+            <div id="translationSubtitleEditor" class="subtitle-editor"></div>
             <div class="result-actions">
+                <button type="button" class="btn-secondary add-subtitle-btn" data-editor="translationSubtitleEditor">
+                    + Azpititulua
+                </button>
                 <button type="button" class="btn-primary" id="approveTranslationBtn">
                     ✅ Onartu eta ahotsa sortu
                 </button>
@@ -201,10 +212,10 @@
         <!-- Footer -->
         <footer class="footer">
             <p>Whisper API (STT) + MarianMT (Itzulpena) + Antzoki/aHoTTS (TTS)</p>
-            <p>Castellano ↔ Euskera bideo itzulpen sistema</p>
+            <p>Gaztelera ↔ Euskera bideo itzulpen sistema</p>
         </footer>
     </div>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=20261007-2"></script>
 </body>
 </html>
