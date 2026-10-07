@@ -33,6 +33,7 @@ from translator import TextTranslator
 # ---------------------------------------------------------------------------
 WHISPER_API_URL = os.getenv("WHISPER_API_URL", "http://whisper-api:8000")
 AHOTTS_API_URL = os.getenv("AHOTTS_API_URL", "http://ahotts-api:8000")
+ANTZOKI_API_URL = os.getenv("ANTZOKI_API_URL", "http://antzoki-api:8000")
 
 UPLOAD_DIR = Path("/app/uploads")
 OUTPUT_DIR = Path("/app/outputs")
@@ -293,6 +294,12 @@ async def health():
         except Exception as e:
             status["ahotts"] = f"unreachable: {str(e)}"
 
+        try:
+            r = await client.get(f"{ANTZOKI_API_URL}/health")
+            status["antzoki"] = r.json() if r.status_code == 200 else "error"
+        except Exception as e:
+            status["antzoki"] = f"unreachable: {str(e)}"
+
     return status
 
 
@@ -394,7 +401,7 @@ async def translate_video(
     file: UploadFile = File(..., description="Video file to translate"),
     source_lang: str = Form(..., description="Source language: es or eu"),
     target_lang: str = Form(..., description="Target language: es or eu"),
-    voice: str = Form("antton", description="TTS voice name"),
+    voice: str = Form("antzoki", description="TTS voice name"),
 ):
     """
     Bideoa igo eta transkripzio-urratsa abiarazi. Berehala itzultzen du
@@ -539,9 +546,10 @@ async def run_synthesis(job_id: str):
         target_lang = job["target_lang"]
         voice = job["voice"]
         video_duration = job["video_duration"]
+        tts_api_url = ANTZOKI_API_URL if target_lang == "eu" else AHOTTS_API_URL
 
         segment_paths = []
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=600.0) as client:
             prev_end = 0.0
             for i, chunk in enumerate(translated_chunks):
                 progress = 60 + int(20 * (i / max(len(translated_chunks), 1)))
@@ -562,7 +570,7 @@ async def run_synthesis(job_id: str):
                     segment_paths.append(silence_path)
 
                 synth_response = await client.post(
-                    f"{AHOTTS_API_URL}/synthesize",
+                    f"{tts_api_url}/synthesize",
                     json={"text": chunk["text"], "language": target_lang, "voice": voice},
                 )
 

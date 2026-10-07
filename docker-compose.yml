@@ -1,0 +1,59 @@
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    ports:
+      - "7860:7860"
+    environment:
+      WHISPER_API_URL: http://whisper-api:8000
+      AHOTTS_API_URL: http://ahotts-api:8000
+      ANTZOKI_API_URL: http://antzoki-api:8000
+    volumes:
+      - app-uploads:/app/uploads
+      - app-outputs:/app/outputs
+      - app-temp:/app/temp
+      - hf-cache:/root/.cache/huggingface
+    depends_on:
+      - whisper-api
+      - ahotts-api
+      - antzoki-api
+    restart: unless-stopped
+
+  whisper-api:
+    build: services/whisper_API
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEVICE: cpu
+      MODEL_ID: openai/whisper-small
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  ahotts-api:
+    build: services/aHoTTS_API
+    volumes:
+      - ahotts-voices:/app/aHoTTS/ahotts/voices
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  antzoki-api:
+    build: services/antzoki_API
+    gpus: all
+    shm_size: 16gb
+    environment:
+      ANTZOKI_MODEL_ROOT: /models
+    volumes:
+      - antzoki-models:/models
+    ports:
+      - "8003:8000"
+    restart: unless-stopped
+
+volumes:
+  app-uploads:
+  app-outputs:
+  app-temp:
+  ahotts-voices:
+  antzoki-models:
+  hf-cache:

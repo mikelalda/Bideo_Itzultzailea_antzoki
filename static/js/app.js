@@ -49,8 +49,7 @@ let currentJobId = null;
 // Voice options per target language
 const VOICES = {
     eu: [
-        { value: 'antton', label: 'Antton (gizona)' },
-        { value: 'maider', label: 'Maider (emakumea)' },
+        { value: 'antzoki', label: 'Antzoki (adierazkorra)' },
     ],
     es: [
         { value: 'laura', label: 'Laura (mujer)' },
@@ -75,6 +74,7 @@ async function checkHealth() {
         orchestrator: document.getElementById('statusOrchestrator'),
         whisper: document.getElementById('statusWhisper'),
         ahotts: document.getElementById('statusAhotts'),
+        antzoki: document.getElementById('statusAntzoki'),
     };
 
     // Set loading
@@ -91,10 +91,14 @@ async function checkHealth() {
 
         dots.ahotts.className = data.ahotts && typeof data.ahotts === 'object'
             ? 'status-dot ok' : 'status-dot error';
+
+        dots.antzoki.className = data.antzoki && data.antzoki.status === 'ok'
+            ? 'status-dot ok' : 'status-dot error';
     } catch {
         dots.orchestrator.className = 'status-dot error';
         dots.whisper.className = 'status-dot error';
         dots.ahotts.className = 'status-dot error';
+        dots.antzoki.className = 'status-dot error';
     }
 }
 
