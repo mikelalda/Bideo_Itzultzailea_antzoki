@@ -198,6 +198,36 @@ body {
     margin-bottom: 0;
 }
 
+.checkbox-option {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    padding: 0.85rem;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    cursor: pointer;
+}
+
+.checkbox-option input {
+    width: 1.1rem;
+    height: 1.1rem;
+    margin-top: 0.15rem;
+    accent-color: var(--primary);
+}
+
+.checkbox-option span,
+.checkbox-option small {
+    display: block;
+}
+
+.checkbox-option small {
+    margin-top: 0.15rem;
+    color: var(--text-secondary);
+    font-weight: 400;
+}
+
 label {
     display: block;
     font-weight: 600;
@@ -389,6 +419,50 @@ select:focus {
     line-height: 1.4;
 }
 
+.subtitle-file-actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.subtitle-file-actions .btn-secondary {
+    padding: 0.55rem 0.85rem;
+}
+
+.transcript-view-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 0.25rem;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+}
+
+.transcript-view-btn {
+    padding: 0.55rem 0.75rem;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.transcript-view-btn.active {
+    background: var(--card-bg);
+    color: var(--primary);
+    box-shadow: var(--shadow);
+}
+
+.transcript-view-hint {
+    margin-bottom: 0.35rem;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
 .subtitle-editor {
     width: 100%;
     max-height: 420px;
@@ -416,6 +490,16 @@ select:focus {
 
 .subtitle-row + .subtitle-row {
     border-top: 1px solid var(--border);
+}
+
+.subtitle-row {
+    border-left: 3px solid transparent;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.subtitle-row.active {
+    background: var(--primary-light);
+    border-left-color: var(--primary);
 }
 
 .subtitle-number {

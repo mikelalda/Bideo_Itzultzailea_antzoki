@@ -20,6 +20,7 @@ const sourceLang = document.getElementById('sourceLang');
 const targetLang = document.getElementById('targetLang');
 const swapLangs = document.getElementById('swapLangs');
 const voiceSelect = document.getElementById('voice');
+const cloneVoice = document.getElementById('cloneVoice');
 const translateForm = document.getElementById('translateForm');
 const submitBtn = document.getElementById('submitBtn');
 const progressCard = document.getElementById('progressCard');
@@ -37,7 +38,15 @@ const retryBtn = document.getElementById('retryBtn');
 // Step-by-step review cards
 const transcriptReviewCard = document.getElementById('transcriptReviewCard');
 const transcriptSubtitleEditor = document.getElementById('transcriptSubtitleEditor');
+const transcriptCaptionEditor = document.getElementById('transcriptCaptionEditor');
+const transcriptSentencesPanel = document.getElementById('transcriptSentencesPanel');
+const transcriptCaptionsPanel = document.getElementById('transcriptCaptionsPanel');
+const transcriptViewButtons = document.querySelectorAll('.transcript-view-btn');
+const addTranscriptSubtitleBtn = document.getElementById('addTranscriptSubtitleBtn');
 const approveTranscriptBtn = document.getElementById('approveTranscriptBtn');
+const downloadTranscriptBtn = document.getElementById('downloadTranscriptBtn');
+const uploadTranscriptBtn = document.getElementById('uploadTranscriptBtn');
+const transcriptFileInput = document.getElementById('transcriptFileInput');
 const translationReviewCard = document.getElementById('translationReviewCard');
 const translationSubtitleEditor = document.getElementById('translationSubtitleEditor');
 const approveTranslationBtn = document.getElementById('approveTranslationBtn');
@@ -45,17 +54,17 @@ const synthesisReviewCard = document.getElementById('synthesisReviewCard');
 const approveSynthesisBtn = document.getElementById('approveSynthesisBtn');
 
 let currentJobId = null;
+let activeTranscriptView = 'sentences';
+let transcriptSyncVersion = 0;
+let transcriptSyncQueue = Promise.resolve();
 
-// Voice options per target language
-const VOICES = {
-    eu: [
-        { value: 'antzoki', label: 'Antzoki (adierazkorra)' },
-    ],
-    es: [
-        { value: 'laura', label: 'Laura (mujer)' },
-        { value: 'alejandro', label: 'Alejandro (hombre)' },
-    ],
-};
+const VOICES = [
+    { value: 'natural', label: 'Naturala' },
+    { value: 'warm', label: 'Beroa' },
+    { value: 'dramatic', label: 'Dramatikoa' },
+    { value: 'serious', label: 'Serioa' },
+    { value: 'joyful', label: 'Alaia' },
+];
 
 // ---------------------------------------------------------------------------
 // Initialization
@@ -73,7 +82,6 @@ async function checkHealth() {
     const dots = {
         orchestrator: document.getElementById('statusOrchestrator'),
         whisper: document.getElementById('statusWhisper'),
-        ahotts: document.getElementById('statusAhotts'),
         antzoki: document.getElementById('statusAntzoki'),
     };
 
@@ -89,15 +97,11 @@ async function checkHealth() {
         dots.whisper.className = data.whisper && typeof data.whisper === 'object'
             ? 'status-dot ok' : 'status-dot error';
 
-        dots.ahotts.className = data.ahotts && typeof data.ahotts === 'object'
-            ? 'status-dot ok' : 'status-dot error';
-
         dots.antzoki.className = data.antzoki && data.antzoki.status === 'ok'
             ? 'status-dot ok' : 'status-dot error';
     } catch {
         dots.orchestrator.className = 'status-dot error';
         dots.whisper.className = 'status-dot error';
-        dots.ahotts.className = 'status-dot error';
         dots.antzoki.className = 'status-dot error';
     }
 }
@@ -199,10 +203,8 @@ targetLang.addEventListener('change', () => {
 });
 
 function updateVoiceOptions() {
-    const lang = targetLang.value;
-    const voices = VOICES[lang] || [];
     voiceSelect.innerHTML = '';
-    voices.forEach(v => {
+    VOICES.forEach(v => {
         const opt = document.createElement('option');
         opt.value = v.value;
         opt.textContent = v.label;
@@ -231,6 +233,7 @@ translateForm.addEventListener('submit', async (e) => {
     formData.append('source_lang', sourceLang.value);
     formData.append('target_lang', targetLang.value);
     formData.append('voice', voiceSelect.value);
+    formData.append('clone_voice', String(cloneVoice.checked));
 
     hideError();
     resultsCard.style.display = 'none';
@@ -283,7 +286,7 @@ function startPolling(jobId) {
             switch (data.state) {
                 case 'awaiting_transcript_review':
                     stopPolling();
-                    renderSubtitleEditor(transcriptSubtitleEditor, data.subtitles || []);
+                    renderTranscriptViews(data);
                     progressCard.style.display = 'none';
                     transcriptReviewCard.style.display = 'block';
                     submitBtn.disabled = false;
@@ -378,9 +381,16 @@ function createSubtitleRow(subtitle, index) {
         const editor = row.parentElement;
         row.remove();
         renumberSubtitleRows(editor);
+        if (editor.classList.contains('transcript-editor')) {
+            syncTranscriptEditor(editor).catch(err => showError(err.message));
+        }
     });
 
     row.append(number, start, end, text, remove);
+    row.addEventListener('click', event => {
+        if (event.target.matches('input, textarea, button')) return;
+        videoPreview.currentTime = Number(start.value) || 0;
+    });
     return row;
 }
 
@@ -390,6 +400,64 @@ function renderSubtitleEditor(editor, subtitles) {
         editor.appendChild(createSubtitleRow(subtitle, index));
     });
 }
+
+function renderTranscriptViews(data) {
+    renderSubtitleEditor(transcriptSubtitleEditor, data.sentences || data.subtitles || []);
+    renderSubtitleEditor(transcriptCaptionEditor, data.captions || []);
+}
+
+function getActiveTranscriptEditor() {
+    return activeTranscriptView === 'captions'
+        ? transcriptCaptionEditor
+        : transcriptSubtitleEditor;
+}
+
+function setTranscriptView(view) {
+    activeTranscriptView = view;
+    transcriptSentencesPanel.hidden = view !== 'sentences';
+    transcriptCaptionsPanel.hidden = view !== 'captions';
+    transcriptViewButtons.forEach(button => {
+        const isActive = button.dataset.view === view;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-selected', String(isActive));
+    });
+}
+
+function syncTranscriptEditor(editor) {
+    if (!currentJobId) return null;
+    const view = editor === transcriptCaptionEditor ? 'captions' : 'sentences';
+    const version = ++transcriptSyncVersion;
+    const subtitles = collectSubtitles(editor);
+    const operation = transcriptSyncQueue.catch(() => {}).then(async () => {
+        const res = await fetch(`${API_BASE}/api/job/${currentJobId}/transcript`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ view, subtitles }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || 'Transkripzioa ezin izan da sinkronizatu');
+        }
+        const data = await res.json();
+        if (version === transcriptSyncVersion) renderTranscriptViews(data);
+        hideError();
+        return data;
+    });
+    transcriptSyncQueue = operation;
+    return operation;
+}
+
+transcriptViewButtons.forEach(button => {
+    button.addEventListener('click', () => setTranscriptView(button.dataset.view));
+});
+
+[transcriptSubtitleEditor, transcriptCaptionEditor].forEach(editor => {
+    editor.addEventListener('change', () => {
+        syncTranscriptEditor(editor).catch(err => showError(err.message));
+    });
+});
+
+addTranscriptSubtitleBtn.addEventListener('click', () => addSubtitle(getActiveTranscriptEditor()));
 
 function renumberSubtitleRows(editor) {
     [...editor.querySelectorAll('.subtitle-row')].forEach((row, index) => {
@@ -420,6 +488,112 @@ function collectSubtitles(editor) {
     return subtitles;
 }
 
+function formatSrtTimestamp(seconds) {
+    const totalMillis = Math.max(0, Math.round(seconds * 1000));
+    const hours = Math.floor(totalMillis / 3600000);
+    const minutes = Math.floor((totalMillis % 3600000) / 60000);
+    const secs = Math.floor((totalMillis % 60000) / 1000);
+    const millis = totalMillis % 1000;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')},${String(millis).padStart(3, '0')}`;
+}
+
+function subtitlesToSrt(subtitles) {
+    return subtitles.map((subtitle, index) => [
+        index + 1,
+        `${formatSrtTimestamp(subtitle.start)} --> ${formatSrtTimestamp(subtitle.end)}`,
+        subtitle.text,
+        '',
+    ].join('\n')).join('\n');
+}
+
+function parseSrtTimestamp(value) {
+    const match = value.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})$/);
+    if (!match) throw new Error(`SRT denbora baliogabea: ${value}`);
+    return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number(match[4]) / 1000;
+}
+
+function srtToSubtitles(srt) {
+    const normalized = srt.replace(/\r\n?/g, '\n').trim();
+    if (!normalized) throw new Error('SRT fitxategia hutsik dago.');
+
+    const subtitles = normalized.split(/\n\s*\n/).map((block, index) => {
+        const lines = block.split('\n');
+        const timeIndex = lines.findIndex(line => line.includes('-->'));
+        if (timeIndex < 0) throw new Error(`${index + 1}. SRT blokeak ez du denborarik.`);
+        const times = lines[timeIndex].split(/\s*-->\s*/);
+        if (times.length !== 2) throw new Error(`${index + 1}. SRT blokearen denbora baliogabea da.`);
+        const text = lines.slice(timeIndex + 1).join(' ').trim();
+        if (!text) throw new Error(`${index + 1}. SRT blokeak ez du testurik.`);
+        return { start: parseSrtTimestamp(times[0]), end: parseSrtTimestamp(times[1]), text };
+    });
+
+    subtitles.forEach((subtitle, index) => {
+        if (subtitle.end <= subtitle.start) {
+            throw new Error(`${index + 1}. SRT blokearen amaiera hasieraren ondoren izan behar da.`);
+        }
+    });
+    return subtitles;
+}
+
+function downloadTranscript() {
+    try {
+        const srt = subtitlesToSrt(collectSubtitles(transcriptCaptionEditor));
+        const blobUrl = URL.createObjectURL(new Blob([srt], { type: 'application/x-subrip;charset=utf-8' }));
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = `${selectedFile?.name.replace(/\.[^.]+$/, '') || 'transkripzioa'}.srt`;
+        link.click();
+        URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+        showError(err.message);
+    }
+}
+
+async function uploadTranscript(file) {
+    try {
+        renderSubtitleEditor(transcriptCaptionEditor, srtToSubtitles(await file.text()));
+        await syncTranscriptEditor(transcriptCaptionEditor);
+        setTranscriptView('captions');
+    } catch (err) {
+        showError(err.message);
+    } finally {
+        transcriptFileInput.value = '';
+    }
+}
+
+function syncActiveSubtitle() {
+    const rows = [...transcriptCaptionEditor.querySelectorAll('.subtitle-row')];
+    const currentTime = videoPreview.currentTime;
+    let activeRow = null;
+    rows.forEach(row => {
+        const start = Number(row.querySelector('.subtitle-start').value);
+        const end = Number(row.querySelector('.subtitle-end').value);
+        const isActive = currentTime >= start && currentTime < end;
+        row.classList.toggle('active', isActive);
+        if (isActive) activeRow = row;
+    });
+    if (activeRow && !activeRow.matches(':focus-within')) {
+        const rowTop = activeRow.offsetTop;
+        const rowBottom = rowTop + activeRow.offsetHeight;
+        const editorTop = transcriptCaptionEditor.scrollTop;
+        const editorBottom = editorTop + transcriptCaptionEditor.clientHeight;
+        if (rowTop < editorTop || rowBottom > editorBottom) {
+            transcriptCaptionEditor.scrollTo({
+                top: rowTop - transcriptCaptionEditor.clientHeight / 2 + activeRow.offsetHeight / 2,
+                behavior: 'smooth',
+            });
+        }
+    }
+}
+
+downloadTranscriptBtn.addEventListener('click', downloadTranscript);
+uploadTranscriptBtn.addEventListener('click', () => transcriptFileInput.click());
+transcriptFileInput.addEventListener('change', () => {
+    if (transcriptFileInput.files.length) uploadTranscript(transcriptFileInput.files[0]);
+});
+videoPreview.addEventListener('timeupdate', syncActiveSubtitle);
+videoPreview.addEventListener('seeked', syncActiveSubtitle);
+
 async function saveSubtitles(editor) {
     const res = await fetch(`${API_BASE}/api/job/${currentJobId}/subtitles`, {
         method: 'PUT',
@@ -443,7 +617,7 @@ approveTranscriptBtn.addEventListener('click', async () => {
     if (!currentJobId) return;
     approveTranscriptBtn.disabled = true;
     try {
-        await saveSubtitles(transcriptSubtitleEditor);
+        await syncTranscriptEditor(getActiveTranscriptEditor());
 
         const approveRes = await fetch(`${API_BASE}/api/job/${currentJobId}/approve`, {
             method: 'POST',

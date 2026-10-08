@@ -7,7 +7,6 @@ services:
       - "7860:7860"
     environment:
       WHISPER_API_URL: http://whisper-api:8000
-      AHOTTS_API_URL: http://ahotts-api:8000
       ANTZOKI_API_URL: http://antzoki-api:8000
     volumes:
       - app-uploads:/app/uploads
@@ -16,7 +15,6 @@ services:
       - hf-cache:/root/.cache/huggingface
     depends_on:
       - whisper-api
-      - ahotts-api
       - antzoki-api
     restart: unless-stopped
 
@@ -28,13 +26,6 @@ services:
       DEVICE: cpu
       MODEL_ID: openai/whisper-large-v3-turbo
     volumes:
-      - hf-cache:/root/.cache/huggingface
-    restart: unless-stopped
-
-  ahotts-api:
-    build: services/aHoTTS_API
-    volumes:
-      - ahotts-voices:/app/aHoTTS/ahotts/voices
       - hf-cache:/root/.cache/huggingface
     restart: unless-stopped
 
@@ -54,6 +45,5 @@ volumes:
   app-uploads:
   app-outputs:
   app-temp:
-  ahotts-voices:
   antzoki-models:
   hf-cache:

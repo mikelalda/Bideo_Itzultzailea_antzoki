@@ -1,13 +1,14 @@
 # =============================================================================
 # Bideo Itzultzailea - Dockerfile combinado para Hugging Face Spaces
-# Empaqueta whisper-api + ahotts-api + orchestrator en UN solo contenedor,
+# Empaqueta whisper-api + orchestrator en UN solo contenedor. Antzoki se
+# configura como servicio GPU externo mediante ANTZOKI_API_URL.
 # gestionados con supervisord (HF Spaces con SDK Docker solo admite 1 proceso
 # principal y 1 puerto expuesto).
 # =============================================================================
 FROM python:3.11-slim-bookworm
 
 LABEL maintainer="Bideo Itzultzailea"
-LABEL description="Video translation system ES <-> EU (Whisper + MarianMT + aHoTTS) - HF Space combinado"
+LABEL description="Video translation system ES <-> EU (Whisper + MarianMT + Antzoki)"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -55,29 +56,7 @@ RUN python3 -m venv /opt/venv/whisper \
     && /opt/venv/whisper/bin/pip install --no-cache-dir -r /app/services/whisper_API/requirements.txt
 
 # =============================================================================
-# 3) ahotts-api - venv propio + binario tts de hitz-zentroa/aHoTTS
-# =============================================================================
-COPY services/aHoTTS_API/requirements.txt /app/services/aHoTTS_API/requirements.txt
-RUN python3 -m venv /opt/venv/ahotts \
-    && /opt/venv/ahotts/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/venv/ahotts/bin/pip install --no-cache-dir -r /app/services/aHoTTS_API/requirements.txt
-
-RUN git clone https://github.com/hitz-zentroa/aHoTTS.git /app/services/aHoTTS_API/aHoTTS \
-    && cp /app/services/aHoTTS_API/aHoTTS/libonnxruntime.so.1.13.1 /usr/lib/ \
-    && ln -sf /usr/lib/libonnxruntime.so.1.13.1 /usr/lib/libonnxruntime.so \
-    && ldconfig \
-    && chmod +x /app/services/aHoTTS_API/aHoTTS/ahotts/tts \
-    && mkdir -p /app/services/aHoTTS_API/aHoTTS/ahotts/voices/eu \
-               /app/services/aHoTTS_API/aHoTTS/ahotts/voices/es \
-               /app/services/aHoTTS_API/aHoTTS/ahotts/voices/gl \
-               /app/services/aHoTTS_API/aHoTTS/ahotts/voices/ca \
-               /app/services/aHoTTS_API/aHoTTS/output
-
-COPY services/aHoTTS_API/app/ /app/services/aHoTTS_API/app/
-COPY services/aHoTTS_API/web/ /app/services/aHoTTS_API/web/
-
-# =============================================================================
-# Supervisord - lanza los 3 procesos en un solo contenedor
+# Supervisord - lanza los 2 procesos locales en un solo contenedor
 # =============================================================================
 COPY supervisord.conf /app/supervisord.conf
 

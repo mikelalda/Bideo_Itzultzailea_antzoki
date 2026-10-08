@@ -176,9 +176,9 @@ async def transcribe(
         "transcribe",
         description="'transcribe' for transcription or 'translate' to translate to English.",
     ),
-    return_timestamps: Optional[bool] = Form(
-        False,
-        description="If true, return word-level or chunk-level timestamps.",
+    return_timestamps: Optional[str] = Form(
+        "false",
+        description="Timestamp detail: 'false', 'true' (segments), or 'word'.",
     ),
 ):
     """
@@ -187,7 +187,7 @@ async def transcribe(
     - **file**: Audio file to transcribe.
     - **language**: Optional language code (eu, es, en). Auto-detected if omitted.
     - **task**: 'transcribe' (default) or 'translate' (translates to English).
-    - **return_timestamps**: Whether to include timestamps in the response.
+    - **return_timestamps**: 'false', 'true' (segments), or 'word'.
     """
     if pipe is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet.")
@@ -234,6 +234,16 @@ async def transcribe(
     if language:
         generate_kwargs["language"] = SUPPORTED_LANGUAGES[language]
 
+    timestamp_value = (return_timestamps or "false").lower()
+    if timestamp_value not in ("false", "true", "word"):
+        raise HTTPException(
+            status_code=400,
+            detail="return_timestamps must be 'false', 'true', or 'word'.",
+        )
+    pipeline_timestamps = (
+        "word" if timestamp_value == "word" else timestamp_value == "true"
+    )
+
     # Run inference in a thread pool so health checks remain responsive
     t0 = time.time()
     try:
@@ -242,7 +252,7 @@ async def transcribe(
             audio,
             batch_size=BATCH_SIZE,
             generate_kwargs=generate_kwargs,
-            return_timestamps=return_timestamps,
+            return_timestamps=pipeline_timestamps,
         )
     except Exception as e:
         logger.exception("Inference failed")
@@ -259,7 +269,7 @@ async def transcribe(
         "processing_time_seconds": round(elapsed, 2),
     }
 
-    if return_timestamps and "chunks" in result:
+    if pipeline_timestamps and "chunks" in result:
         response["chunks"] = result["chunks"]
 
     return JSONResponse(content=response)

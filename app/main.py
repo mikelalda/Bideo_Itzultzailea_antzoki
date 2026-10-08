@@ -1,6 +1,6 @@
 # =============================================================================
 # Bideo Itzultzailea - Video Translation Backend
-# Orchestrates: Whisper (STT) → Translation → aHoTTS (TTS)
+# Orchestrates: Whisper (STT) → Translation → Antzoki/DramaBox (TTS)
 # Supports: Gaztelera ↔ Euskera
 # =============================================================================
 
@@ -32,7 +32,6 @@ from translator import TextTranslator
 # Configuration
 # ---------------------------------------------------------------------------
 WHISPER_API_URL = os.getenv("WHISPER_API_URL", "http://whisper-api:8000")
-AHOTTS_API_URL = os.getenv("AHOTTS_API_URL", "http://ahotts-api:8000")
 ANTZOKI_API_URL = os.getenv("ANTZOKI_API_URL", "http://antzoki-api:8000")
 
 UPLOAD_DIR = Path("/app/uploads")
@@ -126,6 +125,138 @@ def srt_to_chunks(srt_text: str) -> list:
     return chunks
 
 
+def words_to_sentence_chunks(words: list) -> list:
+    """Group word timestamps using sentence-ending punctuation only."""
+    sentences = []
+    current = []
+    start = None
+    end = None
+
+    def flush():
+        nonlocal current, start, end
+        text = "".join(current).strip()
+        if text and start is not None and end is not None:
+            sentences.append({"text": text, "timestamp": [start, end]})
+        current = []
+        start = None
+        end = None
+
+    for word in words:
+        timestamp = word.get("timestamp") or [None, None]
+        word_start = timestamp[0]
+        word_end = timestamp[1] if len(timestamp) > 1 else None
+        raw_text = word.get("text") or ""
+        clean_text = raw_text.strip()
+        if not clean_text or word_start is None or word_end is None:
+            continue
+
+        if start is None:
+            start = word_start
+            current.append(clean_text)
+        elif raw_text[:1].isspace() or re.match(r"^[,.;:!?]", clean_text):
+            current.append(raw_text)
+        else:
+            current.append(f" {clean_text}")
+        end = word_end
+
+        text = "".join(current).strip()
+        sentence_end = bool(re.search(r"[.!?][\"')\]]*$", text))
+        if sentence_end:
+            flush()
+
+    flush()
+    return sentences
+
+
+def words_to_caption_chunks(
+    words: list,
+    max_duration: float = 4.0,
+    max_chars: int = 52,
+    pause_threshold: float = 0.7,
+) -> list:
+    """Group timed words into short cues suitable for video display."""
+    captions = []
+    current = []
+    start = None
+    end = None
+
+    def current_text() -> str:
+        return "".join(current).strip()
+
+    def flush():
+        nonlocal current, start, end
+        text = current_text()
+        if text and start is not None and end is not None:
+            captions.append({"text": text, "timestamp": [start, end]})
+        current = []
+        start = None
+        end = None
+
+    for word in words:
+        timestamp = word.get("timestamp") or [None, None]
+        word_start = timestamp[0]
+        word_end = timestamp[1] if len(timestamp) > 1 else None
+        raw_text = word.get("text") or ""
+        clean_text = raw_text.strip()
+        if not clean_text or word_start is None or word_end is None:
+            continue
+
+        separator = "" if not current or raw_text[:1].isspace() else " "
+        candidate = f"{current_text()}{separator}{clean_text}".strip()
+        has_pause = end is not None and word_start - end >= pause_threshold
+        too_long = start is not None and (
+            word_end - start > max_duration or len(candidate) > max_chars
+        )
+        if current and (has_pause or too_long):
+            flush()
+
+        if start is None:
+            start = word_start
+            current.append(clean_text)
+        elif raw_text[:1].isspace() or re.match(r"^[,.;:!?]", clean_text):
+            current.append(raw_text)
+        else:
+            current.append(f" {clean_text}")
+        end = word_end
+
+        if re.search(r"[.!?][\"')\]]*$", current_text()):
+            flush()
+
+    flush()
+    return captions
+
+
+def chunks_to_timed_words(chunks: list) -> list:
+    """Turn edited chunks back into a shared timed-word representation."""
+    words = []
+    for chunk in chunks:
+        timestamp = chunk.get("timestamp") or [0, 0]
+        start = timestamp[0] if timestamp[0] is not None else 0.0
+        end = timestamp[1] if len(timestamp) > 1 and timestamp[1] is not None else start
+        tokens = re.findall(r"\S+", chunk.get("text") or "")
+        if not tokens:
+            continue
+        token_duration = max(end - start, 0.001) / len(tokens)
+        for index, token in enumerate(tokens):
+            token_start = start + index * token_duration
+            token_end = end if index == len(tokens) - 1 else token_start + token_duration
+            words.append({"text": token, "timestamp": [token_start, token_end]})
+    return words
+
+
+def set_transcript_views(job: dict, words: list):
+    """Store canonical words and refresh both transcript projections."""
+    sentences = words_to_sentence_chunks(words)
+    captions = words_to_caption_chunks(words)
+    job.update({
+        "words": words,
+        "sentence_chunks": sentences,
+        "caption_chunks": captions,
+        "chunks": sentences,
+        "srt": chunks_to_srt(captions),
+    })
+
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -186,6 +317,68 @@ def extract_audio(video_path: str, audio_path: str) -> float:
     probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
     duration = float(probe_result.stdout.strip())
     return duration
+
+
+def detect_speech_start(audio_path: str) -> float:
+    """Return the end of leading silence, or zero when none is detected."""
+    cmd = [
+        "ffmpeg", "-hide_banner", "-i", audio_path,
+        "-af", "silencedetect=noise=-40dB:d=0.1",
+        "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    silence_start = re.search(r"silence_start:\s*(-?\d+(?:\.\d+)?)", result.stderr)
+    if not silence_start or abs(float(silence_start.group(1))) > 0.05:
+        return 0.0
+    silence_end = re.search(r"silence_end:\s*(\d+(?:\.\d+)?)", result.stderr)
+    return float(silence_end.group(1)) if silence_end else 0.0
+
+
+def extract_voice_reference(
+    audio_path: str,
+    output_path: str,
+    start: float,
+    audio_duration: float,
+):
+    """Extract a clean mono reference clip for zero-shot voice conversion."""
+    reference_duration = min(12.0, audio_duration - start)
+    if reference_duration < 1.0:
+        raise RuntimeError("Ez dago ahotsa klonatzeko audio nahikorik")
+    cmd = [
+        "ffmpeg", "-y", "-ss", str(start), "-i", audio_path,
+        "-t", str(reference_duration),
+        "-af", "highpass=f=70,lowpass=f=8000,loudnorm",
+        "-ar", "24000", "-ac", "1", "-acodec", "pcm_s16le",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Voice reference extraction failed: {result.stderr}")
+
+
+def align_word_timeline(words: list, speech_start: float):
+    """Align zero-based Whisper word timestamps with the source audio."""
+    if speech_start <= 0:
+        return
+    first_word = next((word for word in words if (word.get("text") or "").strip()), None)
+    if not first_word:
+        return
+    timestamp = first_word.get("timestamp") or [None, None]
+    word_start = timestamp[0]
+    if word_start is None or word_start > 0.05:
+        return
+    word_end = timestamp[1] if len(timestamp) > 1 else None
+    if word_end is not None and speech_start < word_end:
+        first_word["timestamp"] = [speech_start, word_end]
+        return
+
+    for word in words:
+        word_timestamp = word.get("timestamp") or [None, None]
+        start = word_timestamp[0]
+        end = word_timestamp[1] if len(word_timestamp) > 1 else None
+        if start is None or end is None:
+            continue
+        word["timestamp"] = [start + speech_start, end + speech_start]
 
 
 def get_audio_duration(audio_path: str) -> float:
@@ -271,12 +464,6 @@ async def health():
             status["whisper"] = f"unreachable: {str(e)}"
 
         try:
-            r = await client.get(f"{AHOTTS_API_URL}/health")
-            status["ahotts"] = r.json() if r.status_code == 200 else "error"
-        except Exception as e:
-            status["ahotts"] = f"unreachable: {str(e)}"
-
-        try:
             r = await client.get(f"{ANTZOKI_API_URL}/health")
             status["antzoki"] = r.json() if r.status_code == 200 else "error"
         except Exception as e:
@@ -290,10 +477,10 @@ async def get_voices():
     """Get available TTS voices."""
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
-            r = await client.get(f"{AHOTTS_API_URL}/voices")
+            r = await client.get(f"{ANTZOKI_API_URL}/voices")
             return r.json()
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"aHoTTS unavailable: {e}")
+            raise HTTPException(status_code=503, detail=f"Antzoki unavailable: {e}")
 
 
 class SrtUpdate(BaseModel):
@@ -308,6 +495,10 @@ class SubtitleItem(BaseModel):
 
 class SubtitleUpdate(BaseModel):
     subtitles: list[SubtitleItem]
+
+
+class TranscriptUpdate(SubtitleUpdate):
+    view: str
 
 
 def chunks_to_subtitles(chunks: list) -> list[dict]:
@@ -356,7 +547,9 @@ async def get_job_status(job_id: str):
     }
     if job.get("state") == "awaiting_transcript_review":
         response["srt"] = job.get("srt", "")
-        response["subtitles"] = chunks_to_subtitles(job.get("chunks", []))
+        response["subtitles"] = chunks_to_subtitles(job.get("sentence_chunks", []))
+        response["sentences"] = chunks_to_subtitles(job.get("sentence_chunks", []))
+        response["captions"] = chunks_to_subtitles(job.get("caption_chunks", []))
     if job.get("state") == "awaiting_translation_review":
         response["srt_translated"] = job.get("srt_translated", "")
         response["subtitles"] = chunks_to_subtitles(job.get("translated_chunks", []))
@@ -385,9 +578,31 @@ async def update_job_srt(job_id: str, body: SrtUpdate):
     except ValueError as e:
         raise HTTPException(400, f"SRT baliogabea: {e}")
 
-    job["chunks"] = chunks
-    job["srt"] = body.srt
-    return {"success": True}
+    set_transcript_views(job, chunks_to_timed_words(chunks))
+    return {
+        "success": True,
+        "sentences": chunks_to_subtitles(job["sentence_chunks"]),
+        "captions": chunks_to_subtitles(job["caption_chunks"]),
+    }
+
+
+@app.put("/api/job/{job_id}/transcript")
+async def update_job_transcript(job_id: str, body: TranscriptUpdate):
+    if job_id not in job_status:
+        raise HTTPException(404, "Job not found")
+    job = job_status[job_id]
+    if job.get("state") != "awaiting_transcript_review":
+        raise HTTPException(400, "Job ez dago transkripzioa berrikusteko egoeran")
+    if body.view not in ("sentences", "captions"):
+        raise HTTPException(400, "view must be 'sentences' or 'captions'")
+
+    chunks = validate_subtitles(body.subtitles)
+    set_transcript_views(job, chunks_to_timed_words(chunks))
+    return {
+        "success": True,
+        "sentences": chunks_to_subtitles(job["sentence_chunks"]),
+        "captions": chunks_to_subtitles(job["caption_chunks"]),
+    }
 
 
 @app.put("/api/job/{job_id}/subtitles")
@@ -399,8 +614,7 @@ async def update_job_subtitles(job_id: str, body: SubtitleUpdate):
     state = job.get("state")
     chunks = validate_subtitles(body.subtitles)
     if state == "awaiting_transcript_review":
-        job["chunks"] = chunks
-        job["srt"] = chunks_to_srt(chunks)
+        set_transcript_views(job, chunks_to_timed_words(chunks))
     elif state == "awaiting_translation_review":
         job["translated_chunks"] = chunks
         job["srt_translated"] = chunks_to_srt(chunks)
@@ -447,6 +661,7 @@ async def translate_video(
     source_lang: str = Form(..., description="Source language: es or eu"),
     target_lang: str = Form(..., description="Target language: es or eu"),
     voice: str = Form("antzoki", description="TTS voice name"),
+    clone_voice: bool = Form(True, description="Preserve the source speaker voice"),
 ):
     """
     Bideoa igo eta transkripzio-urratsa abiarazi. Berehala itzultzen du
@@ -471,7 +686,8 @@ async def translate_video(
 
     asyncio.create_task(
         run_transcription(
-            job_id, video_path, video_ext, source_lang, target_lang, voice
+            job_id, video_path, video_ext, source_lang, target_lang, voice,
+            clone_voice,
         )
     )
 
@@ -489,6 +705,7 @@ async def run_transcription(
     source_lang: str,
     target_lang: str,
     voice: str,
+    clone_voice: bool,
 ):
     """1. urratsa: audioa atera + Whisper bidez transkribatu.
     Amaitzean 'awaiting_transcript_review' egoerara pasatzen da, SRT
@@ -508,21 +725,33 @@ async def run_transcription(
                     data={
                         "language": source_lang,
                         "task": "transcribe",
-                        "return_timestamps": "true",
+                        "return_timestamps": "word",
                     },
                 )
             if transcription_response.status_code != 200:
                 raise RuntimeError(f"Whisper API error: {transcription_response.text}")
             transcription = transcription_response.json()
 
-        chunks = transcription.get("chunks") or []
-        if not chunks:
-            chunks = [{
+        words = transcription.get("chunks") or []
+        speech_start = detect_speech_start(audio_path)
+        if not words:
+            fallback_chunks = [{
                 "text": transcription.get("text", ""),
-                "timestamp": [0, video_duration],
+                "timestamp": [speech_start, video_duration],
             }]
+            words = chunks_to_timed_words(fallback_chunks)
+        else:
+            align_word_timeline(words, speech_start)
 
-        srt = chunks_to_srt(chunks)
+        voice_reference_path = None
+        if clone_voice:
+            voice_reference_path = str(TEMP_DIR / f"{job_id}_voice_reference.wav")
+            extract_voice_reference(
+                audio_path,
+                voice_reference_path,
+                speech_start,
+                video_duration,
+            )
 
         job_status[job_id].update({
             "video_path": video_path,
@@ -530,10 +759,11 @@ async def run_transcription(
             "source_lang": source_lang,
             "target_lang": target_lang,
             "voice": voice,
+            "clone_voice": clone_voice,
+            "voice_reference_path": voice_reference_path,
             "video_duration": video_duration,
-            "chunks": chunks,
-            "srt": srt,
         })
+        set_transcript_views(job_status[job_id], words)
         update_job(
             job_id, "awaiting_transcript_review", 30,
             "Berrikusi transkripzioa eta onartu itzultzeko",
@@ -582,7 +812,7 @@ async def run_translation(job_id: str):
 
 
 async def run_synthesis(job_id: str):
-    """3. urratsa: itzulitako testua aHoTTS bidez sintetizatu, zatiak
+    """3. urratsa: itzulitako testua Antzoki bidez sintetizatu, zatiak
     denboran doitu eta elkartu. Amaitzean 'awaiting_synthesis_review'
     egoerara pasatzen da."""
     job = job_status[job_id]
@@ -590,11 +820,12 @@ async def run_synthesis(job_id: str):
         translated_chunks = job["translated_chunks"]
         target_lang = job["target_lang"]
         voice = job["voice"]
+        clone_voice = job.get("clone_voice", False)
+        voice_reference_path = job.get("voice_reference_path")
         video_duration = job["video_duration"]
-        tts_api_url = ANTZOKI_API_URL if target_lang == "eu" else AHOTTS_API_URL
 
         segment_paths = []
-        async with httpx.AsyncClient(timeout=600.0) as client:
+        async with httpx.AsyncClient(timeout=1800.0) as client:
             timeline_cursor = 0.0
             for i, chunk in enumerate(translated_chunks):
                 progress = 60 + int(20 * (i / max(len(translated_chunks), 1)))
@@ -618,14 +849,31 @@ async def run_synthesis(job_id: str):
                 synth_payload = {
                     "text": chunk["text"],
                     "language": target_lang,
-                    "voice": voice,
+                    "voice": "antzoki",
+                    "style": voice,
+                    "duration": chunk_duration,
                 }
-                if target_lang == "eu":
-                    synth_payload["duration"] = chunk_duration
-                synth_response = await client.post(
-                    f"{tts_api_url}/synthesize",
-                    json=synth_payload,
-                )
+                if clone_voice:
+                    with open(voice_reference_path, "rb") as reference_file:
+                        synth_response = await client.post(
+                            f"{ANTZOKI_API_URL}/synthesize-cloned",
+                            data={
+                                "text": chunk["text"],
+                                "language": target_lang,
+                                "style": voice,
+                                "duration": str(chunk_duration),
+                            },
+                            files={
+                                "reference": (
+                                    "reference.wav", reference_file, "audio/wav"
+                                ),
+                            },
+                        )
+                else:
+                    synth_response = await client.post(
+                        f"{ANTZOKI_API_URL}/synthesize",
+                        json=synth_payload,
+                    )
 
                 if synth_response.status_code != 200:
                     logger.error(f"[{job_id}] TTS error for chunk {i}: {synth_response.text}")

@@ -1,7 +1,8 @@
 import logging
 import os
+import tempfile
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
@@ -21,6 +22,11 @@ def _safe_remove(path: str) -> None:
         pass
 
 
+def _safe_remove_many(*paths: str) -> None:
+    for path in paths:
+        _safe_remove(path)
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     import torch
@@ -37,16 +43,21 @@ async def health() -> HealthResponse:
 @app.get("/voices")
 async def voices():
     return {
-        "languages": [{
-            "code": "eu",
-            "name": "Euskara (Basque)",
-            "voices": [{
-                "name": "antzoki",
-                "language": "eu",
-                "language_name": "Euskara (Basque)",
-                "downloaded": antzoki_engine.models_downloaded(),
-            }],
-        }],
+        "languages": [
+            {
+                "code": "eu",
+                "name": "Euskara (Antzoki LoRA)",
+                "engine": "antzoki",
+            },
+            {
+                "code": "es",
+                "name": "Castellano (DramaBox base, experimental)",
+                "engine": "dramabox",
+            },
+        ],
+        "styles": ["natural", "warm", "dramatic", "serious", "joyful"],
+        "voice_cloning": True,
+        "models_downloaded": antzoki_engine.models_downloaded(),
     }
 
 
@@ -62,7 +73,12 @@ async def download_models():
 @app.post("/synthesize")
 async def synthesize(request: SynthesizeRequest):
     try:
-        output_path = await antzoki_engine.synthesize(request.text, request.duration)
+        output_path = await antzoki_engine.synthesize(
+            request.text,
+            language=request.language,
+            duration=request.duration,
+            style=request.style,
+        )
         return FileResponse(
             output_path,
             media_type="audio/wav",
@@ -70,4 +86,43 @@ async def synthesize(request: SynthesizeRequest):
             background=BackgroundTask(_safe_remove, output_path),
         )
     except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/synthesize-cloned")
+async def synthesize_cloned(
+    text: str = Form(...),
+    language: str = Form(...),
+    style: str = Form("natural"),
+    duration: float | None = Form(None),
+    reference: UploadFile = File(...),
+):
+    request = SynthesizeRequest(
+        text=text,
+        language=language,
+        style=style,
+        duration=duration,
+    )
+    suffix = os.path.splitext(reference.filename or "reference.wav")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as reference_file:
+        reference_file.write(await reference.read())
+        reference_path = reference_file.name
+    try:
+        output_path = await antzoki_engine.synthesize(
+            request.text,
+            language=request.language,
+            duration=request.duration,
+            voice_reference=reference_path,
+            style=request.style,
+        )
+        return FileResponse(
+            output_path,
+            media_type="audio/wav",
+            filename="antzoki-cloned.wav",
+            background=BackgroundTask(
+                _safe_remove_many, reference_path, output_path
+            ),
+        )
+    except RuntimeError as exc:
+        _safe_remove(reference_path)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

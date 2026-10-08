@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bideo Itzultzailea - Video Translator</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=20261007-2">
+    <link rel="stylesheet" href="/static/css/style.css?v=20261008-4">
 </head>
 <body>
     <div class="container">
@@ -25,12 +25,8 @@
                 <span>Whisper (STT)</span>
             </div>
             <div class="status-item">
-                <span class="status-dot" id="statusAhotts"></span>
-                <span>aHoTTS (TTS)</span>
-            </div>
-            <div class="status-item">
                 <span class="status-dot" id="statusAntzoki"></span>
-                <span>Antzoki (TTS EU)</span>
+                <span>Antzoki (TTS + ahots-klonazioa)</span>
             </div>
         </div>
 
@@ -78,13 +74,21 @@
                     </div>
                 </div>
 
-                <!-- Voice Selection -->
+                <!-- Delivery Style -->
                 <div class="form-group">
-                    <label for="voice">Ahots sintetikoa</label>
+                    <label for="voice">Ahotsaren tonua</label>
                     <select id="voice" required>
-                        <option value="" disabled>Ahotsak kargatzen...</option>
+                        <option value="" disabled>Estiloak kargatzen...</option>
                     </select>
                 </div>
+
+                <label class="checkbox-option" for="cloneVoice">
+                    <input type="checkbox" id="cloneVoice" checked>
+                    <span>
+                        <strong>Jatorrizko ahotsa mantendu</strong>
+                        <small>Erabili baimena duzun ahotsarekin soilik.</small>
+                    </span>
+                </label>
 
                 <!-- Submit -->
                 <button type="submit" class="btn-primary" id="submitBtn">
@@ -136,14 +140,41 @@
         <div class="card review-card" id="transcriptReviewCard" style="display: none;">
             <h3>1. Berrikusi transkripzioa</h3>
             <p class="review-hint">
-                Zuzendu denborak edo testua, eta onartu itzultzeko.
+                Bi ikuspegiak sinkronizatuta daude. Aldatu testua edo denborak batean, eta bestea automatikoki eguneratuko da.
             </p>
-            <div class="subtitle-editor-header" aria-hidden="true">
-                <span>#</span><span>Hasiera</span><span>Amaiera</span><span>Testua</span><span></span>
+            <div class="subtitle-file-actions">
+                <button type="button" class="btn-secondary" id="downloadTranscriptBtn">
+                    ⬇️ SRT deskargatu
+                </button>
+                <button type="button" class="btn-secondary" id="uploadTranscriptBtn">
+                    📤 SRT igo
+                </button>
+                <input type="file" id="transcriptFileInput" accept=".srt,application/x-subrip,text/plain" hidden>
             </div>
-            <div id="transcriptSubtitleEditor" class="subtitle-editor"></div>
+            <div class="transcript-view-switch" role="tablist" aria-label="Transkripzio ikuspegia">
+                <button type="button" class="transcript-view-btn active" data-view="sentences" role="tab" aria-selected="true">
+                    Esaldi osoak
+                </button>
+                <button type="button" class="transcript-view-btn" data-view="captions" role="tab" aria-selected="false">
+                    Bideoko zatiak
+                </button>
+            </div>
+            <div id="transcriptSentencesPanel" class="transcript-view-panel">
+                <p class="transcript-view-hint">Itzulpenak eta ahots-sintesiak esaldi oso hauek erabiliko dituzte.</p>
+                <div class="subtitle-editor-header" aria-hidden="true">
+                    <span>#</span><span>Hasiera</span><span>Amaiera</span><span>Testua</span><span></span>
+                </div>
+                <div id="transcriptSubtitleEditor" class="subtitle-editor transcript-editor"></div>
+            </div>
+            <div id="transcriptCaptionsPanel" class="transcript-view-panel" hidden>
+                <p class="transcript-view-hint">Zati labur hauek bideoan nabarmendu eta SRT fitxategian gordeko dira.</p>
+                <div class="subtitle-editor-header" aria-hidden="true">
+                    <span>#</span><span>Hasiera</span><span>Amaiera</span><span>Testua</span><span></span>
+                </div>
+                <div id="transcriptCaptionEditor" class="subtitle-editor transcript-editor"></div>
+            </div>
             <div class="result-actions">
-                <button type="button" class="btn-secondary add-subtitle-btn" data-editor="transcriptSubtitleEditor">
+                <button type="button" class="btn-secondary" id="addTranscriptSubtitleBtn">
                     + Azpititulua
                 </button>
                 <button type="button" class="btn-primary" id="approveTranscriptBtn">
@@ -211,11 +242,11 @@
 
         <!-- Footer -->
         <footer class="footer">
-            <p>Whisper API (STT) + MarianMT (Itzulpena) + Antzoki/aHoTTS (TTS)</p>
+            <p>Whisper API (STT) + MarianMT (Itzulpena) + Antzoki/DramaBox (TTS)</p>
             <p>Gaztelera ↔ Euskera bideo itzulpen sistema</p>
         </footer>
     </div>
 
-    <script src="/static/js/app.js?v=20261007-2"></script>
+    <script src="/static/js/app.js?v=20261008-4"></script>
 </body>
 </html>

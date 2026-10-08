@@ -97,7 +97,49 @@ class AntzokiEngine:
             raise RuntimeError("Antzoki requires an NVIDIA GPU with CUDA")
         await asyncio.to_thread(self._download_models)
 
-    async def synthesize(self, text: str, duration: float | None = None) -> str:
+    def build_command(
+        self,
+        prompt: str,
+        output_path: str,
+        language: str,
+        duration: float | None,
+        voice_reference: str | None,
+    ) -> list[str]:
+        command = [
+            sys.executable,
+            os.path.join(DRAMABOX_PATH, "src", "inference.py"),
+            "--prompt", prompt,
+            "--output", output_path,
+            "--checkpoint", str(self.checkpoint),
+            "--full-checkpoint", str(self.components),
+            "--gemma-root", str(self.gemma_dir),
+            "--cfg-scale", "2.5",
+            "--stg-scale", "1.5",
+            "--modality-scale", "1",
+            "--steps", "30",
+            "--fps", "25",
+        ]
+        if voice_reference:
+            command.extend([
+                "--voice-sample", voice_reference,
+                "--ref-duration", "10",
+            ])
+        else:
+            command.append("--no-ref")
+        if language == "eu":
+            command.extend(["--lora", str(self.lora), "--lora-rank", "128"])
+        if duration is not None:
+            command.extend(["--gen-duration", f"{duration:.3f}"])
+        return command
+
+    async def synthesize(
+        self,
+        text: str,
+        language: str = "eu",
+        duration: float | None = None,
+        voice_reference: str | None = None,
+        style: str = "natural",
+    ) -> str:
         if not torch.cuda.is_available():
             raise RuntimeError("Antzoki requires an NVIDIA GPU with CUDA")
 
@@ -106,27 +148,26 @@ class AntzokiEngine:
             os.makedirs(OUTPUT_PATH, exist_ok=True)
             output_path = os.path.join(OUTPUT_PATH, f"antzoki_{uuid.uuid4().hex[:12]}.wav")
             spoken_text = text.replace('"', "'").strip()
-            prompt = f'A professional narrator speaks in Basque, "{spoken_text}"'
+            language_name = "Basque" if language == "eu" else "Spanish"
+            style_prompts = {
+                "natural": "naturally",
+                "warm": "warmly",
+                "dramatic": "with dramatic intensity",
+                "serious": "with clear authority",
+                "joyful": "with joyful energy",
+            }
+            prompt = (
+                f'A person speaks {style_prompts[style]} in {language_name}, '
+                f'"{spoken_text}"'
+            )
 
-            command = [
-                sys.executable,
-                os.path.join(DRAMABOX_PATH, "src", "inference.py"),
-                "--no-ref",
-                "--prompt", prompt,
-                "--output", output_path,
-                "--checkpoint", str(self.checkpoint),
-                "--full-checkpoint", str(self.components),
-                "--gemma-root", str(self.gemma_dir),
-                "--lora", str(self.lora),
-                "--lora-rank", "128",
-                "--cfg-scale", "2.5",
-                "--stg-scale", "1.5",
-                "--modality-scale", "1",
-                "--steps", "30",
-                "--fps", "25",
-            ]
-            if duration is not None:
-                command.extend(["--gen-duration", f"{duration:.3f}"])
+            command = self.build_command(
+                prompt,
+                output_path,
+                language,
+                duration,
+                voice_reference,
+            )
             logger.info("Starting Antzoki synthesis for %d characters", len(text))
             process = await asyncio.create_subprocess_exec(
                 *command,
